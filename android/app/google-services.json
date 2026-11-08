@@ -1,0 +1,62 @@
+{
+  "project_info": {
+    "project_number": "179832539127",
+    "project_id": "trainhub-75989",
+    "storage_bucket": "trainhub-75989.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:179832539127:android:afa3a276bbef2a1d6c90f2",
+        "android_client_info": {
+          "package_name": "com.nbek.trainhub"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "179832539127-gdg1p0bg54nerpcm8p75htc1in674gfu.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.nbek.trainhub",
+            "certificate_hash": "d57037115eddd8272dda94c90388e8cff85b656c"
+          }
+        },
+        {
+          "client_id": "179832539127-prsv3n7lbsghd6lmvd572pok0gs69ni8.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.nbek.trainhub",
+            "certificate_hash": "8f44f09218929500a25c2a3f49f570b4d2411c46"
+          }
+        },
+        {
+          "client_id": "179832539127-li3iqnnlln9oo160s38lsn34q0j9hsrk.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyD0HWRucTobUKYPN3-qWBz8s9VPf1MP75o"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "179832539127-li3iqnnlln9oo160s38lsn34q0j9hsrk.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "179832539127-c987ppc7dahd20mqec5cth05tetkcuh0.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.nbek.trainhub"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

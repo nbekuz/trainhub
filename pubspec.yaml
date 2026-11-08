@@ -1,0 +1,119 @@
+name: trainhub
+description: TrainHub Flutter app — Clean Architecture with Dio, Riverpod, GetIt and GoRouter.
+publish_to: "none"
+version: 1.0.17+17
+
+environment:
+  sdk: ">=3.8.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_localizations:
+    sdk: flutter
+
+  # Networking
+  dio: ^5.8.0+1
+
+  # State management
+  flutter_riverpod: ^2.6.1
+
+  # Routing
+  go_router: ^15.1.2
+
+  # Dependency injection
+  get_it: ^8.0.3
+
+  # Local storage
+  shared_preferences: ^2.5.3
+
+  # UI / assets
+  flutter_svg: ^2.1.0
+  cupertino_icons: ^1.0.8
+
+  # Utilities
+  intl: ^0.20.2
+  equatable: ^2.0.7
+  logger: ^2.5.0
+  json_annotation: ^4.9.0
+  google_sign_in: ^6.3.0
+  sign_in_with_apple: ^7.0.1
+  firebase_core: ^4.15.0
+  firebase_messaging: ^16.7.0
+  webview_flutter: 4.10.0
+  video_player: 2.9.2
+  file_picker: ^13.3.0
+  google_fonts: ^8.2.1
+  http_parser: ^4.1.2
+  url_launcher: ^6.3.3
+  flutter_image_compress: ^2.5.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+  build_runner: ^2.4.15
+  json_serializable: ^6.9.5
+  flutter_launcher_icons: ^0.14.4
+
+flutter_launcher_icons:
+  android: true
+  ios: true
+  image_path: assets/branding/app_icon.png
+  adaptive_icon_background: "#000000"
+  adaptive_icon_foreground: assets/branding/app_icon.png
+  remove_alpha_ios: true
+  min_sdk_android: 21
+
+flutter:
+  uses-material-design: true
+
+  assets:
+    - assets/images/
+    - assets/branding/
+    - assets/icons/
+    - assets/icons/social/
+    - assets/icons/contact/
+    - assets/icons/navbar/
+    - assets/icons/usefull/
+    - assets/icons/quick-action/
+    - assets/icons/exercises/
+    - assets/icons/trainer/
+    - assets/icons/ready/
+    - assets/icons/program/
+    - assets/icons/pro/
+    - assets/icons/main-params/
+    - assets/icons/overview/
+    - assets/icons/overview/weight.svg
+    - assets/icons/overview/progress.svg
+    - assets/icons/overview/pen.svg
+    - assets/icons/workouts/
+    - assets/icons/main-params/gender.svg
+    - assets/icons/main-params/weight.svg
+    - assets/icons/main-params/heigth.svg
+    - assets/icons/main-params/age.svg
+    - assets/icons/main-params/pen.svg
+    - assets/icons/main-params/neck.svg
+    - assets/icons/main-params/shoulders.svg
+    - assets/icons/main-params/chest.svg
+    - assets/icons/main-params/waist.svg
+    - assets/icons/main-params/glutes.svg
+    - assets/icons/main-params/thighs.svg
+    - assets/icons/main-params/right_biceps.svg
+    - assets/icons/main-params/left_biceps.svg
+    - assets/icons/main-params/forearm.svg
+    - assets/icons/main-params/oil.svg
+    - assets/icons/main-params/progres.svg
+    - assets/icons/main-params/bicep.svg
+    - assets/icons/main-params/imt.svg
+
+    - assets/animations/
+    - assets/translations/
+
+  # Uncomment and add font files under assets/fonts/ when ready:
+  # fonts:
+  #   - family: AppFont
+  #     fonts:
+  #       - asset: assets/fonts/AppFont-Regular.ttf
+  #       - asset: assets/fonts/AppFont-Bold.ttf
+  #         weight: 700

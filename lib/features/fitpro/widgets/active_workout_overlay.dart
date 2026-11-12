@@ -8,6 +8,7 @@ import 'package:trainhub/features/fitpro/shell/fit_shell.dart';
 import 'package:trainhub/features/fitpro/workout_offline_queue.dart';
 import 'package:trainhub/features/fitpro/workout_timer.dart';
 import 'package:trainhub/routes/route_names.dart';
+import 'package:trainhub/services/local_storage/storage_service.dart';
 import 'package:trainhub/services/navigation/navigation_service.dart';
 
 /// Global floating mini-card for an in-progress workout.
@@ -52,6 +53,8 @@ class _ActiveWorkoutOverlayState extends State<ActiveWorkoutOverlay> {
   Future<void> _bootstrapActive() async {
     await WorkoutOfflineQueue.I.restoreActiveSession();
     await _refreshActiveMeta();
+    final token = getIt<StorageService>().getToken();
+    if (token == null || token.isEmpty) return;
     try {
       final active = await FitApi.activeSession();
       if (active != null) {

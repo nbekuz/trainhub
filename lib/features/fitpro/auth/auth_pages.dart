@@ -28,16 +28,25 @@ void _showError(BuildContext context, Object error) {
   Toast.error(FitApi.messageOf(error));
 }
 
-Future<void> _enterWithGoogle(WidgetRef ref, BuildContext context) async {
-  final role = ref.read(fitSessionProvider).pendingRole ?? FitRole.client;
+/// Runs a social sign-in. Existing accounts sign in directly; a new account
+/// (backend answers ROLE_REQUIRED) is asked «Кто вы?» and retried with that role.
+Future<void> _socialSignIn(
+  WidgetRef ref,
+  BuildContext context,
+  Future<FitUser> Function(FitRole? role) signIn,
+) async {
+  var role = ref.read(fitSessionProvider).pendingRole;
   try {
-    final account = await GoogleSignIn(
-      scopes: const ['email'],
-      serverClientId: _googleServerClientId,
-    ).signIn();
-    final idToken = (await account?.authentication)?.idToken;
-    if (idToken == null || idToken.isEmpty) return;
-    final user = await FitApi.google(idToken: idToken, role: role);
+    FitUser user;
+    try {
+      user = await signIn(role);
+    } catch (error) {
+      if (role != null || !FitApi.isRoleRequired(error) || !context.mounted) rethrow;
+      role = await _askRole(context);
+      if (role == null) return;
+      ref.read(fitSessionProvider.notifier).setPending(email: '', role: role);
+      user = await signIn(role);
+    }
     ref.read(fitSessionProvider.notifier).signIn(user);
     if (context.mounted) _openHome(context, user);
   } catch (error) {
@@ -45,26 +54,95 @@ Future<void> _enterWithGoogle(WidgetRef ref, BuildContext context) async {
   }
 }
 
-Future<void> _enterWithApple(WidgetRef ref, BuildContext context) async {
-  final role = ref.read(fitSessionProvider).pendingRole ?? FitRole.client;
+Future<FitRole?> _askRole(BuildContext context) {
+  return showBlurredModalBottomSheet<FitRole>(
+    context: context,
+    builder: (ctx) => SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Center(
+              child: Container(
+                width: 72,
+                height: 5,
+                decoration: BoxDecoration(color: const Color(0xFF4A4A4A), borderRadius: BorderRadius.circular(100)),
+              ),
+            ),
+            const SizedBox(height: 20),
+            const Text('Кто вы?', style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.w700)),
+            const SizedBox(height: 8),
+            Text(
+              'Аккаунт ещё не создан. Выберите роль для регистрации',
+              style: TextStyle(color: Colors.white.withValues(alpha: 0.7), fontSize: 14),
+            ),
+            const SizedBox(height: 20),
+            for (final option in const [
+              (role: FitRole.trainer, title: 'Тренер', subtitle: 'Я управляю тренировками клиентов'),
+              (role: FitRole.client, title: 'Клиент', subtitle: 'Я хочу тренироваться и следить за прогрессом'),
+            ]) ...[
+              Material(
+                color: const Color(0xFF2C2C2C),
+                borderRadius: BorderRadius.circular(16),
+                child: ListTile(
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                  title: Text(option.title, style: const TextStyle(color: Colors.white, fontSize: 17, fontWeight: FontWeight.w700)),
+                  subtitle: Text(option.subtitle, style: const TextStyle(color: AppColors.fitGrey, fontSize: 13)),
+                  trailing: const Icon(Icons.chevron_right, color: AppColors.accent),
+                  onTap: () => Navigator.pop(ctx, option.role),
+                ),
+              ),
+              const SizedBox(height: 10),
+            ],
+          ],
+        ),
+      ),
+    ),
+  );
+}
+
+Future<void> _enterWithGoogle(WidgetRef ref, BuildContext context) async {
+  String? idToken;
   try {
-    final credential = await SignInWithApple.getAppleIDCredential(
+    final account = await GoogleSignIn(
+      scopes: const ['email'],
+      serverClientId: _googleServerClientId,
+    ).signIn();
+    idToken = (await account?.authentication)?.idToken;
+  } catch (error) {
+    if (context.mounted) _showError(context, error);
+    return;
+  }
+  final token = idToken;
+  if (token == null || token.isEmpty || !context.mounted) return;
+  await _socialSignIn(ref, context, (role) => FitApi.google(idToken: token, role: role));
+}
+
+Future<void> _enterWithApple(WidgetRef ref, BuildContext context) async {
+  final AuthorizationCredentialAppleID credential;
+  try {
+    credential = await SignInWithApple.getAppleIDCredential(
       scopes: [AppleIDAuthorizationScopes.email, AppleIDAuthorizationScopes.fullName],
     );
-    final token = credential.identityToken;
-    if (token == null || token.isEmpty) return;
-    if (!context.mounted) return;
-    final user = await FitApi.apple(
+  } catch (error) {
+    if (context.mounted) _showError(context, error);
+    return;
+  }
+  final token = credential.identityToken;
+  if (token == null || token.isEmpty || !context.mounted) return;
+  await _socialSignIn(
+    ref,
+    context,
+    (role) => FitApi.apple(
       identityToken: token,
       role: role,
       firstName: credential.givenName,
       lastName: credential.familyName,
-    );
-    ref.read(fitSessionProvider.notifier).signIn(user);
-    if (context.mounted) _openHome(context, user);
-  } catch (error) {
-    if (context.mounted) _showError(context, error);
-  }
+    ),
+  );
 }
 
 class WelcomePage extends StatefulWidget {
@@ -207,7 +285,7 @@ class RolePage extends ConsumerStatefulWidget {
 }
 
 class _RolePageState extends ConsumerState<RolePage> {
-  FitRole? _role;
+  late FitRole? _role = ref.read(fitSessionProvider).pendingRole;
 
   @override
   Widget build(BuildContext context) {
@@ -377,7 +455,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
           ),
           const SizedBox(height: 12),
           TextButton(
-            onPressed: () => context.push(RouteNames.register),
+            onPressed: () => context.push(RouteNames.role),
             child: const Text.rich(
               TextSpan(
                 text: 'Нет аккаунта? ',
@@ -417,6 +495,17 @@ class _RegisterPageState extends ConsumerState<RegisterPage> {
   bool _loading = false;
 
   @override
+  void initState() {
+    super.initState();
+    // Registration always needs an explicit role — never default to client.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && ref.read(fitSessionProvider).pendingRole == null) {
+        context.pushReplacement(RouteNames.role);
+      }
+    });
+  }
+
+  @override
   void dispose() {
     _name.dispose();
     _surname.dispose();
@@ -433,7 +522,11 @@ class _RegisterPageState extends ConsumerState<RegisterPage> {
   }
 
   Future<void> _submit() async {
-    final role = ref.read(fitSessionProvider).pendingRole ?? FitRole.client;
+    final role = ref.read(fitSessionProvider).pendingRole;
+    if (role == null) {
+      context.pushReplacement(RouteNames.role);
+      return;
+    }
     setState(() => _loading = true);
     try {
       final user = await FitApi.register(
@@ -455,6 +548,7 @@ class _RegisterPageState extends ConsumerState<RegisterPage> {
   @override
   Widget build(BuildContext context) {
     final ready = _valid;
+    final role = ref.watch(fitSessionProvider).pendingRole;
     return FitScaffold(
       padding: const EdgeInsets.all(16),
       child: ListView(
@@ -463,6 +557,20 @@ class _RegisterPageState extends ConsumerState<RegisterPage> {
           const FitLogo(),
           const SizedBox(height: 36),
           const Text('Зарегистрироваться', style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.w700)),
+          if (role != null)
+            Wrap(
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                Text(
+                  'Вы регистрируетесь как ${role == FitRole.trainer ? 'тренер' : 'клиент'}',
+                  style: const TextStyle(color: Colors.grey, fontSize: 14),
+                ),
+                TextButton(
+                  onPressed: () => context.pushReplacement(RouteNames.role),
+                  child: const Text('Изменить', style: TextStyle(color: AppColors.accent, fontWeight: FontWeight.w600)),
+                ),
+              ],
+            ),
           const SizedBox(height: 20),
           FitField(
             label: 'Имя',

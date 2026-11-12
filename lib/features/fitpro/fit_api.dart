@@ -310,23 +310,26 @@ class FitApi {
     });
   }
 
-  static Future<FitUser> google({required String idToken, required FitRole role}) async {
+  /// Social sign-in fails with [isRoleRequired] for a brand-new account sent without a role.
+  static bool isRoleRequired(Object error) => error is ApiException && error.code == 'ROLE_REQUIRED';
+
+  static Future<FitUser> google({required String idToken, FitRole? role}) async {
     final response = await _api.post<Map<String, dynamic>>('/auth/google', data: {
       'id_token': idToken,
-      'role': role.name,
+      if (role != null) 'role': role.name,
     });
     return _saveSession(response.data);
   }
 
   static Future<FitUser> apple({
     required String identityToken,
-    required FitRole role,
+    FitRole? role,
     String? firstName,
     String? lastName,
   }) async {
     final response = await _api.post<Map<String, dynamic>>('/auth/apple', data: {
       'identity_token': identityToken,
-      'role': role.name,
+      if (role != null) 'role': role.name,
       if (firstName != null && firstName.isNotEmpty) 'first_name': firstName,
       if (lastName != null && lastName.isNotEmpty) 'last_name': lastName,
     });

@@ -165,6 +165,7 @@ class WorkoutOfflineQueue {
           sessionId,
           exerciseId: int.parse('${op['exercise_id']}'),
           restSec: op['rest_sec'] == null ? null : int.tryParse('${op['rest_sec']}'),
+          clientId: op['client_id'] == null ? null : int.tryParse('${op['client_id']}'),
         );
       case 'add_set':
         await FitApi.addSessionSet(

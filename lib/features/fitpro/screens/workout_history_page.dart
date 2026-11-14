@@ -53,9 +53,12 @@ class _WorkoutHistoryPageState extends State<WorkoutHistoryPage> {
 }
 
 class SessionDetailPage extends StatefulWidget {
-  const SessionDetailPage({super.key, required this.sessionId});
+  const SessionDetailPage({super.key, required this.sessionId, this.clientId});
 
   final int sessionId;
+
+  /// Trainer opened a client's history: show only that client's part of a group workout.
+  final int? clientId;
 
   @override
   State<SessionDetailPage> createState() => _SessionDetailPageState();
@@ -76,10 +79,14 @@ class _SessionDetailPageState extends State<SessionDetailPage> {
     if (showSpinner && mounted) setState(() => _loading = true);
     try {
       Map<String, dynamic> data;
-      try {
-        data = await FitApi.clientSession(widget.sessionId);
-      } catch (_) {
-        data = await FitApi.session(widget.sessionId);
+      if (widget.clientId != null) {
+        data = await FitApi.session(widget.sessionId, clientId: widget.clientId);
+      } else {
+        try {
+          data = await FitApi.clientSession(widget.sessionId);
+        } catch (_) {
+          data = await FitApi.session(widget.sessionId);
+        }
       }
       if (!mounted) return;
       setState(() {
@@ -93,6 +100,23 @@ class _SessionDetailPageState extends State<SessionDetailPage> {
     }
   }
 
+  /// Group workout: exercises under each participant's name; null when only one person trained.
+  List<({String name, List<Map<String, dynamic>> exercises})>? _byClient(List<Map<String, dynamic>> exercises) {
+    final owners = exercises.map((ex) => ex['client_id']?.toString()).whereType<String>().toSet();
+    if (owners.length < 2) return null;
+    final clients = _session['clients'] is List ? (_session['clients'] as List).whereType<Map>().toList() : const [];
+    final shared = exercises.where((ex) => ex['client_id'] == null).toList();
+    return [
+      if (shared.isNotEmpty) (name: 'Все', exercises: shared),
+      for (final c in clients)
+        if (owners.contains('${c['id']}'))
+          (
+            name: '${c['first_name'] ?? ''} ${c['last_name'] ?? ''}'.trim(),
+            exercises: exercises.where((ex) => '${ex['client_id']}' == '${c['id']}').toList(),
+          ),
+    ];
+  }
+
   String _detailTitle() {
     final n = int.tryParse('${_session['session_number'] ?? _session['index'] ?? _session['number'] ?? ''}');
     // Figma always uses «Тренировка #N», never kind label like «Силовая».
@@ -102,9 +126,13 @@ class _SessionDetailPageState extends State<SessionDetailPage> {
 
   @override
   Widget build(BuildContext context) {
-    final exercises = _session['exercises'] is List
-        ? (_session['exercises'] as List).whereType<Map>().map((e) => Map<String, dynamic>.from(e)).toList()
-        : <Map<String, dynamic>>[];
+    final clientId = widget.clientId;
+    final exercises = (_session['exercises'] is List
+            ? (_session['exercises'] as List).whereType<Map>().map((e) => Map<String, dynamic>.from(e)).toList()
+            : <Map<String, dynamic>>[])
+        .where((ex) => clientId == null || ex['client_id'] == null || '${ex['client_id']}' == '$clientId')
+        .toList();
+    final sections = clientId == null ? _byClient(exercises) : null;
     final muscles = <String>{
       for (final ex in exercises)
         if (ex['primary_muscle'] != null) FitLabels.muscle(ex['primary_muscle']?.toString()),
@@ -123,8 +151,9 @@ class _SessionDetailPageState extends State<SessionDetailPage> {
     final minutes = ((int.tryParse('${_session['duration_sec']}') ?? 0) / 60).round();
     final when = DateHelper.parseLocal('${_session['finished_at'] ?? _session['started_at'] ?? _session['created_at'] ?? ''}');
     final dateLabel = when == null ? '—' : DateHelper.formatRuDate(when).replaceAll(' г.', '');
-    final setsCount = _session['sets_count'] ??
+    final localSets =
         exercises.fold<int>(0, (sum, ex) => sum + ((ex['sets'] is List) ? (ex['sets'] as List).length : 0));
+    final setsCount = clientId != null ? localSets : _session['sets_count'] ?? localSets;
     final trainer = _session['trainer_name']?.toString().trim();
     final trainerShort = (trainer == null || trainer.isEmpty)
         ? '—'
@@ -291,14 +320,37 @@ class _SessionDetailPageState extends State<SessionDetailPage> {
                                   child: Text('Нет упражнений', style: GoogleFonts.openSans(color: _label)),
                                 ),
                               )
-                            : Column(
-                                children: [
-                                  for (var i = 0; i < exercises.length; i++) ...[
-                                    if (i > 0) const SizedBox(height: 8),
-                                    _ExerciseDetailCard(exercise: exercises[i]),
-                                  ],
-                                ],
-                              ),
+                            : sections != null
+                                ? Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      for (var s = 0; s < sections.length; s++) ...[
+                                        Padding(
+                                          padding: EdgeInsets.fromLTRB(8, s == 0 ? 4 : 16, 8, 8),
+                                          child: Text(
+                                            sections[s].name,
+                                            style: GoogleFonts.openSans(
+                                              color: _lime,
+                                              fontSize: 14,
+                                              fontWeight: FontWeight.w600,
+                                            ),
+                                          ),
+                                        ),
+                                        for (var i = 0; i < sections[s].exercises.length; i++) ...[
+                                          if (i > 0) const SizedBox(height: 8),
+                                          _ExerciseDetailCard(exercise: sections[s].exercises[i]),
+                                        ],
+                                      ],
+                                    ],
+                                  )
+                                : Column(
+                                    children: [
+                                      for (var i = 0; i < exercises.length; i++) ...[
+                                        if (i > 0) const SizedBox(height: 8),
+                                        _ExerciseDetailCard(exercise: exercises[i]),
+                                      ],
+                                    ],
+                                  ),
                       ),
                     ],
                   ),

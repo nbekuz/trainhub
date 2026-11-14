@@ -238,27 +238,66 @@ class _TrainerHomePageState extends ConsumerState<TrainerHomePage> {
 }
 
 class _UserHeader extends StatelessWidget {
-  const _UserHeader({required this.name, required this.id, this.badge = false});
+  const _UserHeader({required this.name, required this.id, this.badge = false, this.streak});
 
   final String name;
   final String id;
   final bool badge;
+  final int? streak;
 
   @override
   Widget build(BuildContext context) {
+    final letter = name.trim().isEmpty ? 'U' : name.trim()[0].toUpperCase();
     return Row(
       children: [
-        const HubAvatar(letter: 'В', size: 44),
-        const SizedBox(width: 10),
+        Container(
+          width: 44,
+          height: 44,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: const Color(0xFF232323),
+            shape: BoxShape.circle,
+            border: Border.all(color: const Color(0xFF292929)),
+          ),
+          child: Text(
+            letter,
+            style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.w700),
+          ),
+        ),
+        const SizedBox(width: 8),
         Expanded(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(name, style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w700)),
-              Text(id.isEmpty ? '' : 'ID $id', style: const TextStyle(color: AppColors.fitGrey, fontSize: 12)),
+              Text(
+                name,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w600),
+              ),
+              if (id.isNotEmpty) ...[
+                const SizedBox(height: 2),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  decoration: BoxDecoration(color: const Color(0xFF242424), borderRadius: BorderRadius.circular(111)),
+                  child: Text('ID$id', style: const TextStyle(color: Color(0xFF979797), fontSize: 12)),
+                ),
+              ],
             ],
           ),
         ),
+        if (streak != null)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(8, 8, 16, 8),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                SvgPicture.asset('assets/icons/usefull/fire.svg', width: 24, height: 24),
+                const SizedBox(width: 4),
+                Text('$streak', style: const TextStyle(color: Colors.white, fontSize: 16)),
+              ],
+            ),
+          ),
         GestureDetector(
           onTap: () => context.push(RouteNames.notifications),
           child: Container(
@@ -267,7 +306,7 @@ class _UserHeader extends StatelessWidget {
             alignment: Alignment.center,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
-              border: Border.all(color: const Color(0xFF3A3A3A)),
+              border: Border.all(color: const Color(0xFF292929)),
             ),
             child: SizedBox(
               width: 15,
@@ -508,13 +547,26 @@ class ClientDetailPage extends StatefulWidget {
 
 class _ClientDetailPageState extends State<ClientDetailPage> {
   Map<String, dynamic> _card = const {};
-  List<double> _chart = const [];
-  Map<String, dynamic> _session = const {};
+  List<WeightPoint> _weights = const [];
+  List<Map<String, dynamic>> _sessions = const [];
+  Map<String, dynamic> _lastDetail = const {};
+  List<Map<String, dynamic>> _measurements = const [];
+  Map<String, dynamic> _stats = const {};
+  Map<String, dynamic> _home = const {};
+  int _tab = 0;
+  int _refreshGen = 0;
+  final _noteCtrl = TextEditingController();
 
   @override
   void initState() {
     super.initState();
     _load();
+  }
+
+  @override
+  void dispose() {
+    _noteCtrl.dispose();
+    super.dispose();
   }
 
   Future<void> _assignCourseToClient(BuildContext context, int linkId) async {
@@ -568,20 +620,198 @@ class _ClientDetailPageState extends State<ClientDetailPage> {
     }
   }
 
-  Future<void> _load() async {
+  static Future<T?> _safe<T>(Future<T> future) async {
+    try {
+      return await future;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> _load({bool force = false}) async {
     final id = widget.linkId;
     if (id == null || id == 0) return;
+    final results = await Future.wait<Object?>([
+      _safe(FitApi.clientCard(id)),
+      _safe(FitApi.measurementChart('weight_kg', linkId: id, force: force)),
+      _safe(FitApi.linkSessions(id)),
+      _safe(FitApi.linkMeasurements(id)),
+      _safe(FitApi.linkStats(id)),
+    ]);
+    if (!mounted) return;
+    final card = results[0] as Map<String, dynamic>?;
+    final chart = results[1] as List<({DateTime at, double value})>?;
+    final sessions = results[2] as List<Map<String, dynamic>>?;
+    final lastDone = sessions?.firstWhere((s) => s['status'] == 'completed', orElse: () => const {}) ?? const {};
+    final lastId = int.tryParse('${lastDone['id']}') ?? 0;
+    final detail = lastId > 0 ? await _safe(FitApi.session(lastId)) : null;
+    if (!mounted) return;
+    setState(() {
+      if (card != null) _card = card;
+      if (chart != null) {
+        _weights = [for (final p in chart) (at: p.at.toLocal(), value: p.value)]..sort((a, b) => a.at.compareTo(b.at));
+      }
+      if (sessions != null) _sessions = sessions;
+      _lastDetail = detail ?? const {};
+      _measurements = (results[3] as List<Map<String, dynamic>>?) ?? _measurements;
+      _stats = (results[4] as Map<String, dynamic>?) ?? _stats;
+      _home = _buildHome(lastDone);
+    });
+  }
+
+  Future<void> _refresh() async {
+    await _load(force: true);
+    if (mounted) setState(() => _refreshGen++);
+  }
+
+  /// Same shape as `/client/home`, so the client «Обзор» widgets render the trainer view.
+  Map<String, dynamic> _buildHome(Map<String, dynamic> lastDone) {
+    final current = double.tryParse('${_card['weight_kg']}') ?? (_weights.isEmpty ? null : _weights.last.value);
+    final goal = double.tryParse('${_card['target_weight_kg'] ?? _card['weight_goal_kg']}');
+    final monthAgo = DateTime.now().subtract(const Duration(days: 30));
+    final recent = [
+      for (final p in _weights)
+        if (!p.at.isBefore(monthAgo)) p,
+    ];
+    final start = _weights.isEmpty ? null : _weights.first.value;
+    double? progress;
+    if (current != null && goal != null && start != null && goal != start) {
+      progress = ((current - start) / (goal - start) * 100).clamp(0, 100).toDouble();
+    }
+
+    Map<String, dynamic>? last;
+    if (lastDone.isNotEmpty) {
+      final exercises = _lastDetail['exercises'] is List
+          ? (_lastDetail['exercises'] as List).whereType<Map>().toList()
+          : const <Map>[];
+      final top = <Map<String, dynamic>>[];
+      for (final ex in exercises) {
+        final sets = ex['sets'] is List ? (ex['sets'] as List).whereType<Map>() : const <Map>[];
+        num? bestW;
+        num? bestR;
+        for (final s in sets) {
+          final w = num.tryParse('${s['weight_kg']}');
+          final r = num.tryParse('${s['reps']}');
+          if (w != null && (bestW == null || w > bestW)) bestW = w;
+          if (r != null && (bestR == null || r > bestR)) bestR = r;
+        }
+        if (bestW == null) continue;
+        top.add({
+          'name': ex['name'] ?? ex['exercise_name'] ?? 'Упражнение',
+          'weight_kg': bestW % 1 == 0 ? bestW.toInt() : bestW,
+          'reps': bestR,
+        });
+      }
+      top.sort((a, b) => (b['weight_kg'] as num).compareTo(a['weight_kg'] as num));
+      last = {
+        ...lastDone,
+        'exercises_count': exercises.isEmpty ? null : exercises.length,
+        'top_sets': top.take(3).toList(),
+      };
+    }
+
+    return {
+      'weight_kg': current,
+      'weight_goal_kg': goal,
+      'progress_pct': progress,
+      'weight_delta_30d': recent.isEmpty ? null : recent.last.value - recent.first.value,
+      'weight_chart': [
+        for (final p in _weights) {'date': p.at.toIso8601String(), 'weight_kg': p.value},
+      ],
+      'attendance_30d': _card['attendance_30d'],
+      'trainer_notes': _card['notes'],
+      'last_session': last,
+      'streak': _streak(),
+    };
+  }
+
+  int _streak() {
+    final days = <DateTime>{};
+    for (final s in _sessions) {
+      if (s['status'] != 'completed') continue;
+      final at = DateHelper.parseLocal((s['finished_at'] ?? s['started_at'])?.toString());
+      if (at != null) days.add(DateTime(at.year, at.month, at.day));
+    }
+    final now = DateTime.now();
+    var cursor = DateTime(now.year, now.month, now.day);
+    if (!days.contains(cursor)) cursor = cursor.subtract(const Duration(days: 1));
+    var streak = 0;
+    while (days.contains(cursor)) {
+      streak++;
+      cursor = DateTime(cursor.year, cursor.month, cursor.day - 1);
+    }
+    return streak;
+  }
+
+  Future<void> _addWeight() async {
+    final id = widget.linkId ?? 0;
+    if (id == 0) return;
+    final ctrl = TextEditingController(text: '${_home['weight_kg'] ?? ''}');
+    final value = await showDialog<double>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF232323),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(24),
+          side: const BorderSide(color: Color(0xFF323232)),
+        ),
+        title: const Text(
+          'Вес клиента',
+          style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w600),
+        ),
+        content: TextField(
+          controller: ctrl,
+          autofocus: true,
+          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+          style: const TextStyle(color: Colors.white),
+          decoration: const InputDecoration(suffixText: 'кг', hintText: '0'),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Отмена', style: TextStyle(color: AppColors.fitGrey)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, double.tryParse(ctrl.text.replaceAll(',', '.').trim())),
+            child: const Text('Сохранить', style: TextStyle(color: AppColors.accent)),
+          ),
+        ],
+      ),
+    );
+    ctrl.dispose();
+    if (value == null || value <= 0) return;
     try {
-      final card = await FitApi.clientCard(id);
-      final chart = await FitApi.measurementChart('shoulders_cm', linkId: id);
-      final sessions = await FitApi.linkSessions(id);
-      if (!mounted) return;
-      setState(() {
-        _card = card;
-        _chart = [for (final point in chart) point.value];
-        _session = sessions.isEmpty ? const {} : sessions.first;
-      });
-    } catch (_) {}
+      await FitApi.addLinkMeasurement(id, {'weight_kg': value});
+      FitCache.I.invalidate('chart.$id.');
+      await _refresh();
+      Toast.success('Вес сохранён');
+    } catch (e) {
+      Toast.error(FitApi.messageOf(e));
+    }
+  }
+
+  Future<void> _addNote() async {
+    final id = widget.linkId ?? 0;
+    final text = _noteCtrl.text.trim();
+    if (id == 0 || text.isEmpty) return;
+    try {
+      await FitApi.addLinkNote(id, text);
+      _noteCtrl.clear();
+      await _load();
+    } catch (e) {
+      Toast.error(FitApi.messageOf(e));
+    }
+  }
+
+  Future<void> _deleteNote(int noteId) async {
+    final id = widget.linkId ?? 0;
+    if (id == 0 || noteId == 0) return;
+    try {
+      await FitApi.deleteLinkNote(id, noteId);
+      await _load();
+    } catch (e) {
+      Toast.error(FitApi.messageOf(e));
+    }
   }
 
   String _text(Object? value, String fallback) {
@@ -591,14 +821,99 @@ class _ClientDetailPageState extends State<ClientDetailPage> {
 
   String _fmtDate(Object? raw) => DateHelper.formatRuAny(raw, withTime: false);
 
+  Future<void> _startWorkout() async {
+    final userId = int.tryParse('${_card['user_id'] ?? _card['client_id']}') ?? 0;
+    try {
+      final result = await FitApi.startOrResumeSession(clientIds: userId == 0 ? const [] : [userId]);
+      final sessionId = result.sessionId;
+      if (!mounted) return;
+      if (sessionId > 0) {
+        if (result.resumed) Toast.info('Сначала завершите текущую тренировку');
+        context.push(RouteNames.liveSession, extra: sessionId);
+      } else {
+        Toast.success('Тренировка начата');
+      }
+    } catch (error) {
+      if (mounted) Toast.error(FitApi.messageOf(error));
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final name = _text(_card['first_name'], widget.name);
     final full = '${_card['first_name'] ?? ''} ${_card['last_name'] ?? ''}'.trim();
     final title = full.isEmpty ? name : full;
-    final publicId = _text(_card['public_id'], '—');
-    final last = _card['last_measurement'] is Map ? Map<String, dynamic>.from(_card['last_measurement'] as Map) : const <String, dynamic>{};
-    final minutes = ((int.tryParse('${_session['duration_sec']}') ?? 0) / 60).round();
+    final Widget body = switch (_tab) {
+      1 => _sessionsTab(),
+      2 => _measurementsTab(),
+      3 => _progressTab(),
+      4 => _notesTab(),
+      _ => Column(
+        children: [
+          _Overview(
+            key: ValueKey('cd-ov-$_refreshGen'),
+            home: _home,
+            linkId: widget.linkId,
+            onEditWeight: _addWeight,
+            onOpenNotes: () => setState(() => _tab = 4),
+          ),
+          const SizedBox(height: 16),
+          ..._clientInfo(context),
+        ],
+      ),
+    };
+
+    return FitScaffold(
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      onRefresh: _refresh,
+      child: ListView(
+        physics: fitAlwaysScroll,
+        padding: const EdgeInsets.only(bottom: 40),
+        children: [
+          SizedBox(
+            height: 44,
+            child: Stack(
+              alignment: Alignment.center,
+              children: [
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: GestureDetector(
+                    onTap: () => context.pop(),
+                    child: SizedBox(
+                      width: 44,
+                      height: 44,
+                      child: Center(
+                        child: SvgPicture.asset('assets/icons/trainer/arrow-left.svg', width: 24, height: 24),
+                      ),
+                    ),
+                  ),
+                ),
+                const Text(
+                  'Тренировка',
+                  style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w600),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 8),
+          _UserHeader(
+            name: title.isEmpty ? 'Клиент' : title,
+            id: _text(_card['public_id'], ''),
+            streak: _home['streak'] as int? ?? 0,
+          ),
+          const SizedBox(height: 24),
+          _ProfileTabs(selected: _tab, onSelect: (i) => setState(() => _tab = i)),
+          const SizedBox(height: 16),
+          body,
+        ],
+      ),
+    );
+  }
+
+  List<Widget> _clientInfo(BuildContext context) {
+    final last = _card['last_measurement'] is Map
+        ? Map<String, dynamic>.from(_card['last_measurement'] as Map)
+        : const <String, dynamic>{};
     final phone = _text(_card['phone'], '');
     final whatsapp = _text(_card['whatsapp'], '');
     final telegram = _text(_card['telegram'], '');
@@ -610,99 +925,199 @@ class _ClientDetailPageState extends State<ClientDetailPage> {
         : const <Map>[];
     final goals = _card['goals'] is List ? (_card['goals'] as List).map((e) => e.toString()).toList() : const <String>[];
 
-    return FitScaffold(
-      padding: const EdgeInsets.symmetric(horizontal: 16),
-      child: ListView(
-        padding: const EdgeInsets.only(bottom: 40),
-        children: [
-          HubBackTitle(title: title.isEmpty ? 'Клиент' : title),
-          Row(
+    return [
+      SizedBox(
+        width: double.infinity,
+        height: 48,
+        child: FilledButton(
+          onPressed: _startWorkout,
+          style: FilledButton.styleFrom(
+            backgroundColor: AppColors.accent,
+            foregroundColor: Colors.black,
+            shape: const StadiumBorder(),
+          ),
+          child: const Text('Начать тренировку', style: TextStyle(fontWeight: FontWeight.w600)),
+        ),
+      ),
+      const SizedBox(height: 12),
+      HubCard(
+        child: Column(
+          children: [
+            _InfoLine(icon: Icons.calendar_today_outlined, label: 'Дата начала', value: _fmtDate(_card['created_at'])),
+            _InfoLine(
+              icon: Icons.credit_card_outlined,
+              label: 'Абонемент до',
+              value: subEnd == null ? '—' : _fmtDate(subEnd),
+            ),
+            _InfoLine(
+              icon: Icons.monitor_weight_outlined,
+              label: 'Вес (тек / цел)',
+              value: '$weightNow кг / $weightGoal кг',
+            ),
+          ],
+        ),
+      ),
+      const SizedBox(height: 12),
+      HubCard(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Связаться',
+              style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 12),
+            ContactActionsRow(phone: phone, whatsapp: whatsapp, telegram: telegram),
+          ],
+        ),
+      ),
+      const SizedBox(height: 12),
+      HubCard(
+        child: HubMenuTile(
+          icon: Icons.fitness_center_outlined,
+          label: 'Назначить курс',
+          onTap: () => _assignCourseToClient(context, widget.linkId ?? 0),
+        ),
+      ),
+      if (goals.isNotEmpty) ...[
+        const SizedBox(height: 12),
+        HubCard(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              HubAvatar(letter: title, size: 56),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(title.isEmpty ? 'Клиент' : title, style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w700)),
-                    Text(publicId, style: const TextStyle(color: AppColors.fitGrey)),
-                  ],
-                ),
+              const Text(
+                'Цели',
+                style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
               ),
-              FilledButton(
-                onPressed: () async {
-                  final userId = int.tryParse('${_card['user_id'] ?? _card['client_id']}') ?? 0;
-                  try {
-                    final result = await FitApi.startOrResumeSession(
-                      clientIds: userId == 0 ? const [] : [userId],
-                    );
-                    final sessionId = result.sessionId;
-                    if (!context.mounted) return;
-                    if (sessionId > 0) {
-                      if (result.resumed) Toast.info('Сначала завершите текущую тренировку');
-                      context.push(RouteNames.liveSession, extra: sessionId);
-                    } else {
-                      Toast.success('Тренировка начата');
-                    }
-                  } catch (error) {
-                    if (context.mounted) Toast.error(FitApi.messageOf(error));
-                  }
-                },
-                style: FilledButton.styleFrom(
-                  backgroundColor: AppColors.accent,
-                  foregroundColor: Colors.black,
-                  shape: const StadiumBorder(),
-                ),
-                child: const Text('Старт'),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  for (final g in goals)
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF1C1C1C),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: const Color(0xFF323232)),
+                      ),
+                      child: Text(g, style: const TextStyle(color: Colors.white, fontSize: 13)),
+                    ),
+                ],
               ),
             ],
           ),
-          const SizedBox(height: 12),
-          HubCard(
-            child: Column(
-              children: [
-                _InfoLine(icon: Icons.calendar_today_outlined, label: 'Дата начала', value: _fmtDate(_card['created_at'])),
-                _InfoLine(
-                  icon: Icons.credit_card_outlined,
-                  label: 'Абонемент до',
-                  value: subEnd == null ? '—' : _fmtDate(subEnd),
+        ),
+      ],
+      if (contraindications.isNotEmpty) ...[
+        const SizedBox(height: 12),
+        HubCard(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Противопоказания',
+                style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
+              ),
+              const SizedBox(height: 8),
+              for (final c in contraindications)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 6),
+                  child: Text('• ${c['text'] ?? ''}', style: const TextStyle(color: AppColors.fitGrey)),
                 ),
-                _InfoLine(icon: Icons.monitor_weight_outlined, label: 'Вес (тек / цел)', value: '$weightNow кг / $weightGoal кг'),
-              ],
+            ],
+          ),
+        ),
+      ],
+    ];
+  }
+
+  Widget _emptyCard(String text) => HubCard(
+    child: Text(text, style: const TextStyle(color: AppColors.fitGrey, fontSize: 14)),
+  );
+
+  Widget _sessionsTab() {
+    if (_sessions.isEmpty) return _emptyCard('Тренировок пока нет');
+    return Column(
+      children: [
+        for (final s in _sessions) ...[
+          GestureDetector(
+            onTap: () {
+              final id = int.tryParse('${s['id']}') ?? 0;
+              final clientId = int.tryParse('${_card['user_id'] ?? _card['client_id']}');
+              if (id > 0) context.push(RouteNames.sessionDetail, extra: (id: id, clientId: clientId));
+            },
+            child: HubCard(
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          FitLabels.kinds(s['kinds']),
+                          style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w600),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          '${DateHelper.formatRuAny(s['finished_at'] ?? s['started_at'])} · '
+                          '${formatWorkoutDuration(int.tryParse('${s['duration_sec']}'))}',
+                          style: const TextStyle(color: AppColors.fitGrey, fontSize: 13),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Text(
+                    FitLabels.sessionStatus(s['status']?.toString()),
+                    style: TextStyle(
+                      color: s['status'] == 'completed' ? AppColors.accent : AppColors.fitGrey,
+                      fontSize: 13,
+                    ),
+                  ),
+                  const Icon(Icons.chevron_right, color: AppColors.fitGrey),
+                ],
+              ),
             ),
           ),
           const SizedBox(height: 12),
+        ],
+      ],
+    );
+  }
+
+  Widget _measurementsTab() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        OutlinedButton.icon(
+          onPressed: _addWeight,
+          icon: const Icon(Icons.add, color: AppColors.accent),
+          label: const Text('Добавить вес', style: TextStyle(color: Colors.white)),
+          style: OutlinedButton.styleFrom(
+            minimumSize: const Size.fromHeight(48),
+            side: const BorderSide(color: Color(0xFF323232)),
+            shape: const StadiumBorder(),
+          ),
+        ),
+        const SizedBox(height: 12),
+        if (_measurements.isEmpty) _emptyCard('Замеров пока нет'),
+        for (final m in _measurements) ...[
           HubCard(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text('Связаться', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w700)),
-                const SizedBox(height: 12),
-                ContactActionsRow(phone: phone, whatsapp: whatsapp, telegram: telegram),
-              ],
-            ),
-          ),
-          const SizedBox(height: 12),
-          HubCard(
-            child: HubMenuTile(
-              icon: Icons.fitness_center_outlined,
-              label: 'Назначить курс',
-              onTap: () => _assignCourseToClient(context, widget.linkId ?? 0),
-            ),
-          ),
-          if (goals.isNotEmpty) ...[
-            const SizedBox(height: 12),
-            HubCard(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text('Цели', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
-                  const SizedBox(height: 8),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: [
-                      for (final g in goals)
+                Text(
+                  DateHelper.formatRuAny(m['recorded_at'], withTime: false),
+                  style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w600),
+                ),
+                const SizedBox(height: 10),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    for (final f in measurementFields)
+                      if (num.tryParse('${m[f.key]}') case final v?)
                         Container(
                           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                           decoration: BoxDecoration(
@@ -710,88 +1125,150 @@ class _ClientDetailPageState extends State<ClientDetailPage> {
                             borderRadius: BorderRadius.circular(12),
                             border: Border.all(color: const Color(0xFF323232)),
                           ),
-                          child: Text(g, style: const TextStyle(color: Colors.white, fontSize: 13)),
+                          child: Text(
+                            '${f.label}: ${v % 1 == 0 ? v.toInt() : v} ${f.unit}',
+                            style: const TextStyle(color: Colors.white, fontSize: 13),
+                          ),
                         ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-          ],
-          if (contraindications.isNotEmpty) ...[
-            const SizedBox(height: 12),
-            HubCard(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text('Противопоказания', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
-                  const SizedBox(height: 8),
-                  for (final c in contraindications)
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: 6),
-                      child: Text('• ${c['text'] ?? ''}', style: const TextStyle(color: AppColors.fitGrey)),
-                    ),
-                ],
-              ),
-            ),
-          ],
-          const SizedBox(height: 18),
-          const HubSectionTitle(title: 'Статистика'),
-          const SizedBox(height: 8),
-          HubCard(
-            padding: const EdgeInsets.symmetric(vertical: 16),
-            child: Row(
-              children: [
-                _MiniStat(label: 'Рост (см)', value: _text(_card['height_cm'], '—')),
-                _MiniStat(label: 'Вес (кг)', value: weightNow),
-                _MiniStat(label: 'Жир (%)', value: _text(last['body_fat_pct'], '—')),
-              ],
-            ),
-          ),
-          const SizedBox(height: 16),
-          HubCard(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text('Динамика замеров', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
-                const SizedBox(height: 4),
-                const Text('Объем плеч', style: TextStyle(color: AppColors.fitGrey, fontSize: 12)),
-                const SizedBox(height: 8),
-                if (_chart.length < 2)
-                  const Text('Нет данных', style: TextStyle(color: AppColors.fitGrey))
-                else
-                  TrendChart(values: _chart, labels: const ['', '', '', '']),
-              ],
-            ),
-          ),
-          const SizedBox(height: 16),
-          HubCard(
-            padding: EdgeInsets.zero,
-            child: _Attendance(marks: _attendanceMarks(_card['attendance_30d'])),
-          ),
-          const SizedBox(height: 16),
-          HubCard(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text('Прошлая тренировка', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
-                const SizedBox(height: 8),
-                Text(_session.isEmpty ? 'Нет тренировок' : (_session['kinds'] is List ? (_session['kinds'] as List).join(', ') : 'Тренировка'), style: const TextStyle(color: Colors.white)),
-                const SizedBox(height: 8),
-                Row(
-                  children: [
-                    _ChipStat(label: 'Минуты', value: '$minutes'),
-                    const SizedBox(width: 8),
-                    _ChipStat(label: 'Подходы', value: '${_session['sets_count'] ?? '—'}'),
-                    const SizedBox(width: 8),
-                    _ChipStat(label: 'Ккал', value: '${_session['calories'] ?? '—'}'),
                   ],
                 ),
               ],
             ),
           ),
+          const SizedBox(height: 12),
         ],
-      ),
+      ],
+    );
+  }
+
+  Widget _progressTab() {
+    final strength = _stats['strength_progress'] is List
+        ? (_stats['strength_progress'] as List).whereType<Map>().toList()
+        : const <Map>[];
+    final minutes = ((int.tryParse('${_stats['duration_sec_total']}') ?? 0) / 60).round();
+    return Column(
+      children: [
+        OverviewWeightDynamics(key: ValueKey('cd-pr-$_refreshGen'), home: _home, linkId: widget.linkId),
+        const SizedBox(height: 16),
+        HubCard(
+          padding: const EdgeInsets.symmetric(vertical: 16),
+          child: Row(
+            children: [
+              _MiniStat(label: 'Тренировок', value: '${_stats['sessions_completed'] ?? '—'}'),
+              _MiniStat(label: 'Минут', value: '$minutes'),
+              _MiniStat(label: 'Ккал', value: '${_stats['calories_total'] ?? '—'}'),
+            ],
+          ),
+        ),
+        const SizedBox(height: 16),
+        HubCard(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Силовые показатели',
+                style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w700),
+              ),
+              const SizedBox(height: 12),
+              if (strength.isEmpty)
+                const Text('Нет данных', style: TextStyle(color: AppColors.fitGrey))
+              else
+                for (final item in strength)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            item['name']?.toString() ?? 'Упражнение',
+                            style: const TextStyle(color: AppColors.fitGrey, fontSize: 13),
+                          ),
+                        ),
+                        Text(
+                          '${item['last_weight_kg'] ?? '—'} кг × ${item['last_reps'] ?? '—'}',
+                          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 13),
+                        ),
+                        if (item['best_weight_kg'] != null)
+                          Text(
+                            '  · макс ${item['best_weight_kg']} кг',
+                            style: const TextStyle(color: AppColors.accent, fontSize: 12),
+                          ),
+                      ],
+                    ),
+                  ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _notesTab() {
+    final notes = _card['notes'] is List ? (_card['notes'] as List).whereType<Map>().toList() : const <Map>[];
+    return Column(
+      children: [
+        HubCard(
+          child: Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: _noteCtrl,
+                  minLines: 1,
+                  maxLines: 4,
+                  textCapitalization: TextCapitalization.sentences,
+                  style: const TextStyle(color: Colors.white),
+                  decoration: const InputDecoration(
+                    hintText: 'Новая заметка',
+                    hintStyle: TextStyle(color: AppColors.fitGrey),
+                    border: InputBorder.none,
+                  ),
+                ),
+              ),
+              GestureDetector(
+                onTap: _addNote,
+                child: Container(
+                  width: 36,
+                  height: 36,
+                  decoration: const BoxDecoration(color: AppColors.accent, shape: BoxShape.circle),
+                  child: const Icon(Icons.add, color: Colors.black, size: 22),
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 12),
+        if (notes.isEmpty) _emptyCard('Заметок пока нет'),
+        for (final n in notes) ...[
+          HubCard(
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        n['text']?.toString() ?? '',
+                        style: const TextStyle(color: Colors.white, fontSize: 14, height: 1.4),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        DateHelper.formatRuAny(n['created_at']),
+                        style: const TextStyle(color: AppColors.fitGrey, fontSize: 12),
+                      ),
+                    ],
+                  ),
+                ),
+                IconButton(
+                  onPressed: () => _deleteNote(int.tryParse('${n['id']}') ?? 0),
+                  icon: const Icon(Icons.delete_outline, color: AppColors.fitGrey, size: 20),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 12),
+        ],
+      ],
     );
   }
 }
@@ -4534,29 +5011,14 @@ class _ClientHomePageState extends ConsumerState<ClientHomePage> {
         physics: fitAlwaysScroll,
         padding: const EdgeInsets.only(bottom: 120),
         children: [
-          _UserHeader(name: name, id: user?.uuid ?? '', badge: int.tryParse('${_home['unread_count']}') != 0),
-          const SizedBox(height: 8),
-          SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: Row(
-              children: [
-                for (var i = 0; i < _tabs.length; i++)
-                  Padding(
-                    padding: const EdgeInsets.only(right: 8),
-                    child: ChoiceChip(
-                      label: Text(_tabs[i]),
-                      selected: _tab == i,
-                      showCheckmark: false,
-                      onSelected: (_) => setState(() => _tab = i),
-                      selectedColor: AppColors.accent,
-                      backgroundColor: AppColors.fitCard,
-                      labelStyle: TextStyle(color: _tab == i ? Colors.black : Colors.white, fontWeight: FontWeight.w600),
-                      side: BorderSide.none,
-                    ),
-                  ),
-              ],
-            ),
+          _UserHeader(
+            name: name,
+            id: user?.uuid ?? '',
+            badge: int.tryParse('${_home['unread_count']}') != 0,
+            streak: int.tryParse('${_home['streak']}') ?? 0,
           ),
+          const SizedBox(height: 24),
+          _ProfileTabs(selected: _tab, onSelect: (i) => setState(() => _tab = i)),
           const SizedBox(height: 16),
           // Only the active tab takes height (IndexedStack used the tallest → empty scroll).
           // maintainState keeps tab state; keys bump on pull-to-refresh.
@@ -4602,29 +5064,75 @@ class _ClientHomePageState extends ConsumerState<ClientHomePage> {
 
 const _tabs = ['Обзор', 'Тренировки', 'Замеры', 'Прогресс', 'Заметки'];
 
+class _ProfileTabs extends StatelessWidget {
+  const _ProfileTabs({required this.selected, required this.onSelect});
+
+  final int selected;
+  final ValueChanged<int> onSelect;
+
+  @override
+  Widget build(BuildContext context) {
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      clipBehavior: Clip.none,
+      child: Row(
+        children: [
+          for (var i = 0; i < _tabs.length; i++) ...[
+            if (i > 0) const SizedBox(width: 8),
+            GestureDetector(
+              onTap: () => onSelect(i),
+              child: Container(
+                height: 36,
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: selected == i ? AppColors.accent : const Color(0xFF232323),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                    color: selected == i ? Colors.white.withValues(alpha: 0.5) : const Color(0xFF323232),
+                  ),
+                ),
+                child: Text(
+                  _tabs[i],
+                  style: TextStyle(color: selected == i ? const Color(0xFF0C0C0C) : Colors.white, fontSize: 13),
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
 class _Overview extends StatelessWidget {
-  const _Overview({super.key, required this.home, this.onOpenNotes});
+  const _Overview({super.key, required this.home, this.onOpenNotes, this.linkId, this.onEditWeight});
 
   final Map<String, dynamic> home;
   final VoidCallback? onOpenNotes;
 
+  /// Set when a trainer views a client: charts load that client's data.
+  final int? linkId;
+  final VoidCallback? onEditWeight;
+
   @override
   Widget build(BuildContext context) {
-    final weightNum = double.tryParse('${home['weight_kg']}'.replaceAll(',', '.'));
-    final weight = weightNum == null
-        ? '—'
-        : (weightNum == weightNum.roundToDouble()
-            ? weightNum.round().toString()
-            : weightNum.toStringAsFixed(1).replaceAll('.', ','));
+    String kg(Object? raw) {
+      final v = double.tryParse('$raw'.replaceAll(',', '.'));
+      if (v == null) return '—';
+      return v == v.roundToDouble() ? v.round().toString() : v.toStringAsFixed(1).replaceAll('.', ',');
+    }
+
+    final weight = kg(home['weight_kg']);
     final deltaNum = double.tryParse('${home['weight_delta_30d']}'.replaceAll(',', '.'));
     final deltaText = deltaNum == null
         ? '—'
         : '${deltaNum > 0 ? '+' : ''}${deltaNum.toStringAsFixed(1).replaceAll('.', ',')} кг';
     final deltaColor = deltaNum == null || deltaNum == 0
         ? AppColors.fitGrey
-        : (deltaNum > 0 ? _up : _down);
+        : (deltaNum > 0 ? const Color(0xFF37F184) : _down);
     final progress = double.tryParse('${home['progress_pct']}') ?? 0;
-    final goal = home['weight_goal_kg']?.toString() ?? '—';
+    final goal = kg(home['weight_goal_kg']);
     final last = home['last_session'] is Map ? Map<String, dynamic>.from(home['last_session'] as Map) : const <String, dynamic>{};
     final kindsLabel = FitLabels.kinds(last['kinds'] ?? last['kind'] ?? last['title']);
     final hasLast = last.isNotEmpty;
@@ -4634,94 +5142,101 @@ class _Overview extends StatelessWidget {
         : const <Map<String, dynamic>>[];
     return Column(
       children: [
-        Row(
-          children: [
-            Expanded(
-              child: Container(
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF232323),
-                  borderRadius: BorderRadius.circular(24),
-                  border: Border.all(color: const Color(0xFF323232)),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        const _OverviewIconBox(asset: 'assets/icons/overview/weight.svg'),
-                        const SizedBox(width: 8),
-                        const Text('Вес', style: TextStyle(color: Colors.white, fontSize: 16)),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    Row(
-                      children: [
-                        Text(
-                          '$weight кг',
-                          style: const TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.w800),
-                        ),
-                        const SizedBox(width: 12),
-                        GestureDetector(
-                          onTap: () => context.push(RouteNames.measurements),
-                          child: SvgPicture.asset('assets/icons/overview/pen.svg', width: 20, height: 20),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 4),
-                    Text(deltaText, style: TextStyle(color: deltaColor, fontSize: 14)),
-                    const SizedBox(height: 2),
-                    const Text('За 30 дней', style: TextStyle(color: Color(0xFF979797), fontSize: 14)),
-                  ],
-                ),
-              ),
-            ),
-            const SizedBox(width: 16),
-            Expanded(
-              child: Container(
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF232323),
-                  borderRadius: BorderRadius.circular(24),
-                  border: Border.all(color: const Color(0xFF323232)),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        const _OverviewIconBox(asset: 'assets/icons/overview/progress.svg'),
-                        const SizedBox(width: 8),
-                        const Expanded(
-                          child: Text('Прогресс', style: TextStyle(color: Colors.white, fontSize: 16)),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      '${progress.round()}%',
-                      style: const TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.w800),
-                    ),
-                    const SizedBox(height: 10),
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(100),
-                      child: LinearProgressIndicator(
-                        value: (progress / 100).clamp(0, 1),
-                        minHeight: 6,
-                        color: AppColors.accent,
-                        backgroundColor: const Color(0xFF3A3A3A),
+        IntrinsicHeight(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Expanded(
+                child: Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF232323),
+                    borderRadius: BorderRadius.circular(24),
+                    border: Border.all(color: const Color(0xFF323232)),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          const _OverviewIconBox(asset: 'assets/icons/overview/weight.svg'),
+                          const SizedBox(width: 8),
+                          const Text('Вес', style: TextStyle(color: Colors.white, fontSize: 16)),
+                        ],
                       ),
-                    ),
-                    const SizedBox(height: 8),
-                    Text('До $goal кг', style: const TextStyle(color: Color(0xFF979797), fontSize: 14)),
-                  ],
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          Flexible(
+                            child: Text(
+                              '$weight кг',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.w700),
+                            ),
+                          ),
+                          const SizedBox(width: 16),
+                          GestureDetector(
+                            onTap: onEditWeight ?? () => context.push(RouteNames.measurements),
+                            child: SvgPicture.asset('assets/icons/overview/pen.svg', width: 20, height: 20),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      Text(deltaText, style: TextStyle(color: deltaColor, fontSize: 14)),
+                      const SizedBox(height: 8),
+                      const Text('За 30 дней', style: TextStyle(color: Color(0xFF979797), fontSize: 14)),
+                    ],
+                  ),
                 ),
               ),
-            ),
-          ],
+              const SizedBox(width: 16),
+              Expanded(
+                child: Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF232323),
+                    borderRadius: BorderRadius.circular(24),
+                    border: Border.all(color: const Color(0xFF323232)),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          const _OverviewIconBox(asset: 'assets/icons/overview/progress.svg'),
+                          const SizedBox(width: 8),
+                          const Expanded(
+                            child: Text('Прогресс', style: TextStyle(color: Colors.white, fontSize: 16)),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        '${progress.round()}%',
+                        style: const TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.w700),
+                      ),
+                      const SizedBox(height: 16),
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(100),
+                        child: LinearProgressIndicator(
+                          value: (progress / 100).clamp(0, 1),
+                          minHeight: 6,
+                          color: AppColors.accent,
+                          backgroundColor: const Color(0xFF3A3A3A),
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      Text('До $goal кг', style: const TextStyle(color: Color(0xFF979797), fontSize: 14)),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
         ),
-        const SizedBox(height: 12),
-        OverviewWeightDynamics(home: home),
+        const SizedBox(height: 16),
+        OverviewWeightDynamics(home: home, linkId: linkId),
         const SizedBox(height: 12),
         HubCard(
           padding: EdgeInsets.zero,
@@ -4741,7 +5256,7 @@ class _Overview extends StatelessWidget {
                     onTap: () {
                       if (lastId > 0) {
                         context.push(RouteNames.sessionDetail, extra: lastId);
-                      } else {
+                      } else if (linkId == null) {
                         context.push(RouteNames.lastWorkout);
                       }
                     },

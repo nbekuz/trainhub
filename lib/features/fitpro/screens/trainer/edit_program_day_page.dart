@@ -380,73 +380,20 @@ class _EditProgramDayPageState extends State<EditProgramDayPage> {
     }
   }
 
+  /// Sets and reps are entered later, on the live workout screen.
   Future<void> _addExercise() async {
     final picked = await _pickExercise();
     if (picked == null || !mounted) return;
     final exerciseId = int.tryParse('${picked['id']}') ?? 0;
     if (exerciseId <= 0) return;
 
-    final setsCtrl = TextEditingController(text: '3');
-    final repsMinCtrl = TextEditingController(text: '10');
-    final repsMaxCtrl = TextEditingController(text: '12');
-    final name = picked['title']?.toString() ?? picked['name']?.toString() ?? 'Упражнение';
-
-    final ok = await showModalBottomSheet<bool>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: const Color(0xFF1C1C1C),
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
-      builder: (ctx) {
-        return Padding(
-          padding: EdgeInsets.fromLTRB(16, 16, 16, 16 + MediaQuery.of(ctx).viewInsets.bottom),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Text(name, style: const TextStyle(color: Colors.white, fontSize: 17, fontWeight: FontWeight.w700)),
-              const SizedBox(height: 14),
-              const Text('Подходы', style: TextStyle(color: AppColors.fitGrey, fontSize: 13)),
-              const SizedBox(height: 6),
-              _NumField(controller: setsCtrl),
-              const SizedBox(height: 12),
-              const Text('Повторения от', style: TextStyle(color: AppColors.fitGrey, fontSize: 13)),
-              const SizedBox(height: 6),
-              _NumField(controller: repsMinCtrl),
-              const SizedBox(height: 12),
-              const Text('Повторения до', style: TextStyle(color: AppColors.fitGrey, fontSize: 13)),
-              const SizedBox(height: 6),
-              _NumField(controller: repsMaxCtrl),
-              const SizedBox(height: 16),
-              FitAccentButton(title: 'Добавить', onPressed: () => Navigator.pop(ctx, true)),
-              const SizedBox(height: 8),
-            ],
-          ),
-        );
-      },
-    );
-
-    if (ok != true || !mounted) {
-      setsCtrl.dispose();
-      repsMinCtrl.dispose();
-      repsMaxCtrl.dispose();
-      return;
-    }
-
     setState(() => _saving = true);
     try {
-      final updated = await FitApi.addProgramDayExercise(widget.programId, _dayId, {
-        'exercise_id': exerciseId,
-        'sets': int.tryParse(setsCtrl.text.trim()) ?? 3,
-        'reps_min': int.tryParse(repsMinCtrl.text.trim()),
-        'reps_max': int.tryParse(repsMaxCtrl.text.trim()),
-      });
+      final updated = await FitApi.addProgramDayExercise(widget.programId, _dayId, {'exercise_id': exerciseId});
       _applyProgram(updated);
     } catch (e) {
       if (mounted) Toast.error(FitApi.messageOf(e));
     } finally {
-      setsCtrl.dispose();
-      repsMinCtrl.dispose();
-      repsMaxCtrl.dispose();
       if (mounted) setState(() => _saving = false);
     }
   }

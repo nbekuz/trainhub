@@ -76,6 +76,13 @@ const _compositionFields = <({String key, String label, String asset, String uni
   ),
 ];
 
+/// Label and unit for a `body_measurements` column, in the order shown in «Замеры».
+final measurementFields = <({String key, String label, String unit})>[
+  (key: 'weight_kg', label: 'Вес', unit: 'кг'),
+  for (final f in _compositionFields) (key: f.key, label: f.label, unit: f.unit),
+  for (final f in _girthFields) (key: f.key, label: f.label, unit: 'см'),
+];
+
 String _formatCm(num? value) {
   if (value == null) return '—';
   return value.toStringAsFixed(1).replaceAll('.', ',');

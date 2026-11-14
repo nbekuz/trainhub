@@ -48,8 +48,7 @@ class _CreateProgramPageState extends ConsumerState<CreateProgramPage> {
 
   bool get _isTrainer => ref.read(fitSessionProvider).user?.role == FitRole.trainer;
   bool get _ownMode => widget.asOwnWorkout || !_isTrainer;
-  bool get _hasCover => (_coverPath != null && _coverPath!.isNotEmpty) || (_coverUrl != null && _coverUrl!.trim().isNotEmpty);
-  bool get _formValid => _titleCtrl.text.trim().isNotEmpty && _hasCover && !_saving;
+  bool get _formValid => _titleCtrl.text.trim().isNotEmpty && !_saving;
 
   @override
   void initState() {
@@ -147,10 +146,6 @@ class _CreateProgramPageState extends ConsumerState<CreateProgramPage> {
   Future<void> _createProgram() async {
     if (_titleCtrl.text.trim().isEmpty) {
       Toast.info('Укажите название');
-      return;
-    }
-    if (!_hasCover) {
-      Toast.info('Добавьте обложку');
       return;
     }
     if (!_formValid) return;
@@ -306,10 +301,6 @@ class _CreateProgramPageState extends ConsumerState<CreateProgramPage> {
   bool get _hasMinExercises => _exerciseCount >= 1;
 
   Future<void> _saveAndClose() async {
-    if (!_hasCover) {
-      Toast.info('Добавьте обложку');
-      return;
-    }
     if (!_hasMinExercises) {
       Toast.info('Добавьте хотя бы одно упражнение');
       return;
@@ -458,7 +449,7 @@ class _CreateProgramPageState extends ConsumerState<CreateProgramPage> {
                 ),
               ),
               const SizedBox(height: 20),
-              const Text('Обложка *', style: TextStyle(color: AppColors.fitGrey, fontSize: 13)),
+              const Text('Обложка', style: TextStyle(color: AppColors.fitGrey, fontSize: 13)),
               const SizedBox(height: 8),
               _CoverPicker(
                 localPath: _coverPath,

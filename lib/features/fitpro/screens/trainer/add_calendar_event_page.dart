@@ -59,7 +59,8 @@ class _AddCalendarEventPageState extends State<AddCalendarEventPage> {
   final _noteCtrl = TextEditingController();
 
   List<FitClient> _clients = const [];
-  int? _selectedClientUserId;
+  // users.id of picked clients; the first one leads a group session.
+  List<int> _selectedClientUserIds = const [];
   late DateTime _date;
   late TimeOfDay _startTime;
   late TimeOfDay _endTime;
@@ -143,7 +144,7 @@ class _AddCalendarEventPageState extends State<AddCalendarEventPage> {
       } else if (start != null) {
         _endTime = TimeOfDay(hour: (start.hour + 1) % 24, minute: start.minute);
       }
-      _selectedClientUserId = selected;
+      _selectedClientUserIds = selected == null ? const [] : [selected];
       _format = format.isNotEmpty ? format : 'gym';
       _reminder = reminder.isNotEmpty ? reminder : '1h';
       _repeatWeekly = event['repeat_weekly'] == true;
@@ -167,14 +168,26 @@ class _AddCalendarEventPageState extends State<AddCalendarEventPage> {
     super.dispose();
   }
 
-  FitClient? get _selectedClient {
-    final selected = _selectedClientUserId;
-    if (selected == null) return null;
-    for (final c in _clients) {
-      final uid = c.userId > 0 ? c.userId : c.id;
-      if (uid == selected || c.id == selected) return c;
+  static int _uidOf(FitClient c) => c.userId > 0 ? c.userId : c.id;
+
+  List<FitClient> get _selectedClients {
+    final result = <FitClient>[];
+    for (final selected in _selectedClientUserIds) {
+      for (final c in _clients) {
+        if (_uidOf(c) == selected || c.id == selected) {
+          result.add(c);
+          break;
+        }
+      }
     }
-    return null;
+    return result;
+  }
+
+  String get _clientsLabel {
+    final names = _selectedClients.map((c) => '${c.name} ${c.surname}'.trim()).toList();
+    if (names.isEmpty) return 'Выберите клиента';
+    if (names.length <= 2) return names.join(', ');
+    return '${names.take(2).join(', ')}, +${names.length - 2}';
   }
 
   String get _kindsLabel {
@@ -246,8 +259,11 @@ class _AddCalendarEventPageState extends State<AddCalendarEventPage> {
       Toast.info('Клиентов пока нет');
       return;
     }
+    // An existing event belongs to one client, so editing keeps a single choice.
+    final multi = !_isEdit;
+    final draft = List<int>.of(_selectedClientUserIds);
     final searchCtrl = TextEditingController();
-    final picked = await showBlurredModalBottomSheet<int>(
+    final picked = await showBlurredModalBottomSheet<List<int>>(
       context: context,
       builder: (ctx) {
         return StatefulBuilder(
@@ -260,7 +276,7 @@ class _AddCalendarEventPageState extends State<AddCalendarEventPage> {
                     return name.contains(q);
                   }).toList();
             return DraggableScrollableSheet(
-              initialChildSize: 0.65,
+              initialChildSize: multi ? 0.8 : 0.65,
               minChildSize: 0.4,
               maxChildSize: 0.95,
               expand: false,
@@ -298,23 +314,79 @@ class _AddCalendarEventPageState extends State<AddCalendarEventPage> {
                             separatorBuilder: (_, _) => const Divider(color: Color(0xFF323232), height: 1),
                             itemBuilder: (_, i) {
                               final c = filtered[i];
-                              final uid = c.userId > 0 ? c.userId : c.id;
-                              final selected = uid == _selectedClientUserId;
+                              final uid = _uidOf(c);
+                              final selected = draft.contains(uid);
                               final name = '${c.name} ${c.surname}'.trim();
+                              final avatar = CircleAvatar(
+                                backgroundColor: const Color(0xFF3A3A3A),
+                                child: Text(c.initials, style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w700)),
+                              );
+                              if (multi) {
+                                return ListTile(
+                                  leading: avatar,
+                                  title: Text(name, style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w500)),
+                                  trailing: _Checkbox(checked: selected),
+                                  onTap: () => setB(() => selected ? draft.remove(uid) : draft.add(uid)),
+                                );
+                              }
                               return ListTile(
-                                leading: CircleAvatar(
-                                  backgroundColor: const Color(0xFF3A3A3A),
-                                  child: Text(c.initials, style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w700)),
-                                ),
+                                leading: avatar,
                                 title: Text(name, style: TextStyle(color: selected ? AppColors.accent : Colors.white)),
                                 trailing: selected
                                     ? const Icon(Icons.radio_button_checked, color: AppColors.accent)
                                     : const Icon(Icons.radio_button_off, color: Color(0xFF6A6A6A)),
-                                onTap: () => Navigator.pop(ctx, uid),
+                                onTap: () => Navigator.pop(ctx, [uid]),
                               );
                             },
                           ),
                   ),
+                  if (multi)
+                    SafeArea(
+                      top: false,
+                      child: Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+                        child: Column(
+                          children: [
+                            SizedBox(
+                              width: double.infinity,
+                              height: 48,
+                              child: OutlinedButton(
+                                onPressed: draft.isEmpty ? null : () => setB(draft.clear),
+                                style: OutlinedButton.styleFrom(
+                                  foregroundColor: AppColors.accent,
+                                  side: const BorderSide(color: Color(0xFF323232)),
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                                ),
+                                child: const Text('Сбросить всё', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+                              ),
+                            ),
+                            const SizedBox(height: 16),
+                            SizedBox(
+                              width: double.infinity,
+                              height: 48,
+                              child: DecoratedBox(
+                                decoration: BoxDecoration(
+                                  borderRadius: BorderRadius.circular(16),
+                                  boxShadow: const [BoxShadow(color: Color(0x40C7F137), blurRadius: 16, offset: Offset(0, 4))],
+                                ),
+                                child: FilledButton(
+                                  onPressed: () => Navigator.pop(ctx2, List<int>.of(draft)),
+                                  style: FilledButton.styleFrom(
+                                    backgroundColor: AppColors.accent,
+                                    foregroundColor: Colors.black,
+                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                                  ),
+                                  child: Text(
+                                    draft.isEmpty ? 'Применить' : 'Применить (${draft.length})',
+                                    style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
                 ],
               ),
             );
@@ -323,7 +395,7 @@ class _AddCalendarEventPageState extends State<AddCalendarEventPage> {
       },
     );
     searchCtrl.dispose();
-    if (picked != null) setState(() => _selectedClientUserId = picked);
+    if (picked != null) setState(() => _selectedClientUserIds = picked);
   }
 
   Future<void> _pickKinds() async {
@@ -497,11 +569,11 @@ class _AddCalendarEventPageState extends State<AddCalendarEventPage> {
     return '${local.toIso8601String()}$sign$hours:$mins';
   }
 
-  bool get _valid => _selectedClientUserId != null && !_saving;
+  bool get _valid => _selectedClientUserIds.isNotEmpty && !_saving;
 
-  /// Create (schedule) or update a calendar event.
+  /// Create (schedule) one calendar event per picked client, or update the edited one.
   Future<void> _saveEvent() async {
-    if (_selectedClientUserId == null) {
+    if (_selectedClientUserIds.isEmpty) {
       Toast.info('Выберите клиента');
       return;
     }
@@ -515,7 +587,6 @@ class _AddCalendarEventPageState extends State<AddCalendarEventPage> {
       }
 
       final body = <String, dynamic>{
-        'client_id': _selectedClientUserId,
         'starts_at': _toIsoLocal(startsAt),
         'ends_at': _toIsoLocal(endsAt),
         'format': _format,
@@ -526,13 +597,29 @@ class _AddCalendarEventPageState extends State<AddCalendarEventPage> {
         'note': _noteCtrl.text.trim().isEmpty ? null : _noteCtrl.text.trim(),
       };
 
+      final ids = _selectedClientUserIds;
       if (_isEdit) {
-        await FitApi.updateCalendarEvent(widget.eventId!, body);
+        await FitApi.updateCalendarEvent(widget.eventId!, {'client_id': ids.first, ...body});
       } else {
-        await FitApi.createCalendarEvent(body);
+        for (var i = 0; i < ids.length; i++) {
+          try {
+            await FitApi.createCalendarEvent({'client_id': ids[i], ...body});
+          } catch (_) {
+            // Drop already scheduled clients so a retry doesn't duplicate their events.
+            if (mounted && i > 0) setState(() => _selectedClientUserIds = ids.sublist(i));
+            rethrow;
+          }
+        }
       }
       if (!mounted) return;
-      Toast.success(_isEdit ? 'Тренировка обновлена' : 'Тренировка запланирована на ${_dateLabel()} ${_timeLabel(_startTime)}');
+      final when = '${_dateLabel()} ${_timeLabel(_startTime)}';
+      Toast.success(
+        _isEdit
+            ? 'Тренировка обновлена'
+            : ids.length > 1
+                ? 'Тренировка запланирована на $when (клиентов: ${ids.length})'
+                : 'Тренировка запланирована на $when',
+      );
       context.pop(_date);
     } catch (e) {
       if (!mounted) return;
@@ -543,8 +630,10 @@ class _AddCalendarEventPageState extends State<AddCalendarEventPage> {
   }
 
   /// Create calendar visit for "now" (metadata) + open active live session.
+  /// Several clients share one group session; the visit is recorded for the first one.
   Future<void> _startWorkout() async {
-    if (_selectedClientUserId == null) {
+    final ids = _selectedClientUserIds;
+    if (ids.isEmpty) {
       Toast.info('Выберите клиента');
       return;
     }
@@ -557,7 +646,7 @@ class _AddCalendarEventPageState extends State<AddCalendarEventPage> {
       final note = _noteCtrl.text.trim();
 
       final event = await FitApi.createCalendarEvent({
-        'client_id': _selectedClientUserId,
+        'client_id': ids.first,
         'starts_at': _toIsoLocal(now),
         'ends_at': _toIsoLocal(ends),
         'format': _format,
@@ -572,7 +661,9 @@ class _AddCalendarEventPageState extends State<AddCalendarEventPage> {
       int sessionId = 0;
       if (eventId > 0) {
         try {
-          final session = await FitApi.startSessionFromCalendar(eventId);
+          final session = ids.length == 1
+              ? await FitApi.startSessionFromCalendar(eventId)
+              : await FitApi.startSession(clientIds: ids, kinds: kinds, calendarEventId: eventId);
           sessionId = int.tryParse('${session['id']}') ?? 0;
         } catch (_) {
           sessionId = 0;
@@ -580,7 +671,7 @@ class _AddCalendarEventPageState extends State<AddCalendarEventPage> {
       }
       if (sessionId <= 0) {
         final started = await FitApi.startOrResumeSession(
-          clientIds: [_selectedClientUserId!],
+          clientIds: ids,
           kinds: kinds,
           source: 'new',
         );
@@ -610,8 +701,7 @@ class _AddCalendarEventPageState extends State<AddCalendarEventPage> {
 
   @override
   Widget build(BuildContext context) {
-    final client = _selectedClient;
-    final clientName = client == null ? 'Выберите клиента' : '${client.name} ${client.surname}'.trim();
+    final clients = _selectedClients;
 
     return FitScaffold(
       child: Column(
@@ -638,20 +728,15 @@ class _AddCalendarEventPageState extends State<AddCalendarEventPage> {
                         onTap: _pickClient,
                         child: Row(
                           children: [
-                            CircleAvatar(
-                              radius: 18,
-                              backgroundColor: const Color(0xFF3A3A3A),
-                              child: Text(
-                                client?.initials ?? '?',
-                                style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w700),
-                              ),
-                            ),
+                            _AvatarStack(initials: clients.isEmpty ? const ['?'] : clients.map((c) => c.initials).toList()),
                             const SizedBox(width: 8),
                             Expanded(
                               child: Text(
-                                clientName,
+                                _clientsLabel,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
                                 style: TextStyle(
-                                  color: client == null ? AppColors.fitGrey : Colors.white,
+                                  color: clients.isEmpty ? AppColors.fitGrey : Colors.white,
                                   fontSize: 14,
                                 ),
                               ),
@@ -948,6 +1033,64 @@ class _SelectRow extends StatelessWidget {
         ),
         alignment: Alignment.centerLeft,
         child: child,
+      ),
+    );
+  }
+}
+
+class _Checkbox extends StatelessWidget {
+  const _Checkbox({required this.checked});
+
+  final bool checked;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 18,
+      height: 18,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        color: checked ? const Color(0xFF4A4A4A) : Colors.transparent,
+        borderRadius: BorderRadius.circular(4),
+        border: checked ? null : Border.all(color: const Color(0xFF3A3A3A), width: 1.5),
+      ),
+      child: checked ? const Icon(Icons.check_rounded, size: 13, color: AppColors.accent) : null,
+    );
+  }
+}
+
+class _AvatarStack extends StatelessWidget {
+  const _AvatarStack({required this.initials});
+
+  final List<String> initials;
+
+  static const _size = 36.0;
+  static const _step = 22.0;
+
+  @override
+  Widget build(BuildContext context) {
+    final shown = initials.take(3).toList();
+    return SizedBox(
+      width: _size + _step * (shown.length - 1),
+      height: _size,
+      child: Stack(
+        children: [
+          for (var i = shown.length - 1; i >= 0; i--)
+            Positioned(
+              left: _step * i,
+              child: Container(
+                width: _size,
+                height: _size,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: const Color(0xFF3A3A3A),
+                  shape: BoxShape.circle,
+                  border: Border.all(color: const Color(0xFF232323), width: 2),
+                ),
+                child: Text(shown[i], style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w700)),
+              ),
+            ),
+        ],
       ),
     );
   }

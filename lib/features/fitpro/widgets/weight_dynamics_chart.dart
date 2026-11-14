@@ -154,9 +154,10 @@ class WeightDynamicsCard extends StatelessWidget {
 
 /// Self-contained block for Обзор: parses `home['weight_chart']`, period + selection.
 class OverviewWeightDynamics extends StatefulWidget {
-  const OverviewWeightDynamics({super.key, required this.home});
+  const OverviewWeightDynamics({super.key, required this.home, this.linkId});
 
   final Map<String, dynamic> home;
+  final int? linkId;
 
   @override
   State<OverviewWeightDynamics> createState() => _OverviewWeightDynamicsState();
@@ -193,7 +194,7 @@ class _OverviewWeightDynamicsState extends State<OverviewWeightDynamics> {
 
   Future<void> _loadFullChart() async {
     try {
-      final chart = await FitApi.measurementChart('weight_kg');
+      final chart = await FitApi.measurementChart('weight_kg', linkId: widget.linkId);
       if (!mounted || chart.isEmpty) return;
       setState(() {
         _all = [for (final p in chart) (at: p.at, value: p.value)];

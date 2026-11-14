@@ -13,7 +13,7 @@ import 'package:trainhub/features/fitpro/workout_offline_queue.dart';
 import 'package:trainhub/features/fitpro/workout_timer.dart';
 import 'package:trainhub/routes/route_names.dart';
 
-/// Live workout: sets with +/- steppers, previous results, rest timer, offline queue.
+/// Live workout: sets with +/- steppers, previous results, offline queue.
 class LiveSessionPage extends StatefulWidget {
   const LiveSessionPage({super.key, required this.sessionId});
 
@@ -33,29 +33,27 @@ class _LiveSessionPageState extends State<LiveSessionPage> with WidgetsBindingOb
   bool _busy = false;
   bool _offline = false;
   int _pendingOps = 0;
-  int _activeExerciseIndex = 0;
-
-  // Rest timer
-  Timer? _restTimer;
-  int _restLeft = 0;
-  int _restTotal = 90;
-  bool _restRunning = false;
-  bool _restPaused = false;
-  bool _restDoneFlash = false;
+  final Map<int, int> _activeIndexByClient = {};
 
   // Elapsed workout clock + offline sync
   Timer? _elapsedTimer;
   Timer? _syncTimer;
   Duration _elapsed = Duration.zero;
 
-  // Draft for next set
-  double _draftWeight = 40;
-  int _draftReps = 10;
-
-  List<Map<String, dynamic>> get _exercises {
+  /// Exercises of every participant.
+  List<Map<String, dynamic>> get _allExercises {
     final raw = _session['exercises'] ?? _session['items'] ?? _session['session_exercises'];
     return raw is List ? raw.whereType<Map>().map((e) => Map<String, dynamic>.from(e)).toList() : const [];
   }
+
+  /// Exercises on the selected client's screen; `client_id` null = shared by everyone.
+  List<Map<String, dynamic>> get _exercises => _allExercises.where((ex) {
+    final owner = int.tryParse('${ex['client_id']}');
+    return owner == null || _selectedClientId == null || owner == _selectedClientId;
+  }).toList();
+
+  int get _activeExerciseIndex => _activeIndexByClient[_selectedClientId ?? 0] ?? 0;
+  set _activeExerciseIndex(int value) => _activeIndexByClient[_selectedClientId ?? 0] = value;
 
   Map<String, dynamic>? get _activeExercise {
     final list = _exercises;
@@ -70,6 +68,14 @@ class _LiveSessionPageState extends State<LiveSessionPage> with WidgetsBindingOb
     if (w == null) return false;
     final text = w.toString().trim();
     return text.isNotEmpty && text != 'null';
+  }
+
+  /// First name; adds the surname initial when another participant has the same first name.
+  String _clientLabel(Map<String, dynamic> client) {
+    final first = client['first_name']?.toString().trim() ?? '';
+    final last = client['last_name']?.toString().trim() ?? '';
+    final namesakes = _clients.where((c) => (c['first_name']?.toString().trim() ?? '') == first).length;
+    return namesakes > 1 && last.isNotEmpty ? '$first\u00A0${last[0]}.' : first;
   }
 
   List<Map<String, dynamic>> get _clients {
@@ -110,11 +116,17 @@ class _LiveSessionPageState extends State<LiveSessionPage> with WidgetsBindingOb
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     WorkoutOfflineQueue.I.suppressMiniCard.value = false;
-    _restTimer?.cancel();
     _elapsedTimer?.cancel();
     _syncTimer?.cancel();
-    for (final t in _patchTimers.values) {
-      t.cancel();
+    // Leaving via the bottom menu must not drop set edits still waiting for the debounce.
+    for (final setId in _patchTimers.keys.toList()) {
+      _patchTimers[setId]?.cancel();
+      for (final ex in _allExercises) {
+        for (final s in _setsOf(ex)) {
+          if ('${s['id']}' != '$setId') continue;
+          unawaited(_sendSetPatch(setId, num.tryParse('${s['weight_kg']}') ?? 0, int.tryParse('${s['reps']}') ?? 0));
+        }
+      }
     }
     super.dispose();
   }
@@ -297,77 +309,16 @@ class _LiveSessionPageState extends State<LiveSessionPage> with WidgetsBindingOb
       final prev = await FitApi.previousExerciseSets(widget.sessionId, exerciseId, clientId: _selectedClientId);
       if (!mounted) return;
       setState(() => _previousByExercise[key] = prev);
-      if (prev.isNotEmpty && _setsOf(ex).isEmpty) {
-        final last = prev.last;
-        final w = double.tryParse('${last['weight_kg']}');
-        final r = int.tryParse('${last['reps']}');
-        if (w != null) _draftWeight = w;
-        if (r != null) _draftReps = r;
-      }
     } catch (_) {}
   }
 
-  void _startRest([int? seconds]) {
-    final ex = _activeExercise;
-    final fromEx = int.tryParse('${ex?['rest_sec']}');
-    _restTotal = seconds ?? fromEx ?? 90;
-    if (_restTotal < 15) _restTotal = 90;
-    _restTimer?.cancel();
-    setState(() {
-      _restLeft = _restTotal;
-      _restRunning = true;
-      _restPaused = false;
-      _restDoneFlash = false;
-    });
-    _armRestTicker();
-  }
-
-  void _armRestTicker() {
-    _restTimer?.cancel();
-    _restTimer = Timer.periodic(const Duration(seconds: 1), (t) {
-      if (!mounted) {
-        t.cancel();
-        return;
-      }
-      if (_restPaused) return;
-      if (_restLeft <= 1) {
-        t.cancel();
-        setState(() {
-          _restLeft = 0;
-          _restRunning = false;
-          _restPaused = false;
-          _restDoneFlash = true;
-        });
-        Toast.success('Отдых завершён');
-        Future<void>.delayed(const Duration(seconds: 3), () {
-          if (mounted && _restDoneFlash) setState(() => _restDoneFlash = false);
-        });
-      } else {
-        setState(() => _restLeft -= 1);
-      }
-    });
-  }
-
-  void _pauseRest() {
-    if (!_restRunning || _restPaused) return;
-    _restTimer?.cancel();
-    setState(() => _restPaused = true);
-  }
-
-  void _resumeRest() {
-    if (!_restRunning || !_restPaused || _restLeft <= 0) return;
-    setState(() => _restPaused = false);
-    _armRestTicker();
-  }
-
-  void _skipRest() {
-    _restTimer?.cancel();
-    setState(() {
-      _restRunning = false;
-      _restPaused = false;
-      _restLeft = 0;
-      _restDoneFlash = false;
-    });
+  /// Values for a new set: copy the exercise's last set, else the last set of the previous workout.
+  ({num weight, int reps}) _nextSetValues(Map<String, dynamic> ex) {
+    final sets = _setsOf(ex);
+    final exerciseId = int.tryParse('${ex['exercise_id']}') ?? 0;
+    final previous = _previousByExercise[_prevKey(exerciseId)] ?? const [];
+    final source = sets.isNotEmpty ? sets.last : (previous.isNotEmpty ? previous.last : null);
+    return (weight: num.tryParse('${source?['weight_kg']}') ?? 40, reps: int.tryParse('${source?['reps']}') ?? 10);
   }
 
   Future<void> _selectClient(int clientId) async {
@@ -453,7 +404,9 @@ class _LiveSessionPageState extends State<LiveSessionPage> with WidgetsBindingOb
     try {
       final session = await FitApi.addSessionClient(widget.sessionId, picked.userId);
       await _applySession(WorkoutTimer.withStartAnchor(session));
-      if (mounted) Toast.success('Клиент добавлен');
+      if (!mounted) return;
+      Toast.success('Клиент добавлен');
+      await _selectClient(picked.userId);
     } catch (e) {
       if (mounted) Toast.error(FitApi.messageOf(e));
     } finally {
@@ -464,7 +417,7 @@ class _LiveSessionPageState extends State<LiveSessionPage> with WidgetsBindingOb
   /// Sets stay editable: optimistic local update, debounced PATCH (queued offline).
   void _editSet(Map<String, dynamic> set, {num? weight, int? reps}) {
     final setId = int.tryParse('${set['id']}') ?? 0;
-    final exercises = _exercises;
+    final exercises = _allExercises;
     num? newWeight;
     int? newReps;
     for (final ex in exercises) {
@@ -755,11 +708,19 @@ class _LiveSessionPageState extends State<LiveSessionPage> with WidgetsBindingOb
     final id = int.tryParse('${selected['id']}') ?? 0;
     if (id == 0) return;
     setState(() => _busy = true);
+    var added = false;
+    final clientId = _selectedClientId;
     try {
-      final session = await FitApi.addSessionExercise(widget.sessionId, exerciseId: id, restSec: 90);
+      final session = await FitApi.addSessionExercise(
+        widget.sessionId,
+        exerciseId: id,
+        restSec: 90,
+        clientId: clientId,
+      );
       await _applySession(session);
       setState(() => _activeExerciseIndex = _exercises.length - 1);
       await _loadPreviousForActive();
+      added = true;
       if (mounted) Toast.success('Упражнение добавлено');
     } catch (_) {
       await WorkoutOfflineQueue.I.enqueue({
@@ -767,16 +728,18 @@ class _LiveSessionPageState extends State<LiveSessionPage> with WidgetsBindingOb
         'session_id': widget.sessionId,
         'exercise_id': id,
         'rest_sec': 90,
+        if (clientId != null) 'client_id': clientId,
       });
       // Optimistic local append
       final local = Map<String, dynamic>.from(_session);
       final list = [
-        ..._exercises,
+        ..._allExercises,
         {
           'id': -DateTime.now().millisecondsSinceEpoch,
           'exercise_id': id,
           'name': selected['name'] ?? selected['title'] ?? 'Упражнение',
           'rest_sec': 90,
+          'client_id': clientId,
           'sets': <Map<String, dynamic>>[],
           '_local': true,
         },
@@ -787,16 +750,19 @@ class _LiveSessionPageState extends State<LiveSessionPage> with WidgetsBindingOb
       setState(() {
         _session = local;
         _offline = true;
-        _activeExerciseIndex = list.length - 1;
+        _activeExerciseIndex = _exercises.length - 1;
         _pendingOps += 1;
       });
       Toast.info('Сохранено офлайн');
     } finally {
       if (mounted) setState(() => _busy = false);
     }
+    // A new exercise starts with one editable set.
+    if (added && mounted) await _addSet();
   }
 
-  Future<void> _completeSet() async {
+  /// Adds an editable set to the active exercise.
+  Future<void> _addSet() async {
     final ex = _activeExercise;
     if (ex == null) return;
     final seId = int.tryParse('${ex['id']}') ?? 0;
@@ -804,31 +770,32 @@ class _LiveSessionPageState extends State<LiveSessionPage> with WidgetsBindingOb
       Toast.info('Сначала синхронизируйте упражнение');
       return;
     }
+    final (:weight, :reps) = _nextSetValues(ex);
     setState(() => _busy = true);
     final opId = 'set_${widget.sessionId}_${seId}_${DateTime.now().microsecondsSinceEpoch}';
     try {
       final session = await FitApi.addSessionSet(
         widget.sessionId,
         seId,
-        weightKg: _draftWeight,
-        reps: _draftReps,
+        weightKg: weight,
+        reps: reps,
         clientOpId: opId,
       );
       await _applySession(session);
-      _startRest();
     } catch (_) {
       await WorkoutOfflineQueue.I.enqueue({
         'type': 'add_set',
         'session_id': widget.sessionId,
         'se_id': seId,
-        'weight_kg': _draftWeight,
-        'reps': _draftReps,
+        'weight_kg': weight,
+        'reps': reps,
         'is_warmup': false,
         'client_op_id': opId,
       });
       final local = Map<String, dynamic>.from(_session);
-      final exercises = _exercises.map((e) => Map<String, dynamic>.from(e)).toList();
-      final idx = _activeExerciseIndex.clamp(0, exercises.length - 1);
+      final exercises = _allExercises.map((e) => Map<String, dynamic>.from(e)).toList();
+      final idx = exercises.indexWhere((e) => '${e['id']}' == '${ex['id']}');
+      if (idx < 0) return;
       final existing = (exercises[idx]['sets'] is List)
           ? (exercises[idx]['sets'] as List).whereType<Map>().map((s) => Map<String, dynamic>.from(s)).toList()
           : <Map<String, dynamic>>[];
@@ -836,16 +803,16 @@ class _LiveSessionPageState extends State<LiveSessionPage> with WidgetsBindingOb
       if (pendingIdx >= 0) {
         existing[pendingIdx] = {
           ...existing[pendingIdx],
-          'weight_kg': _draftWeight,
-          'reps': _draftReps,
+          'weight_kg': weight,
+          'reps': reps,
           'completed_at': DateTime.now().toIso8601String(),
           '_local': true,
         };
       } else {
         existing.add({
           'id': -DateTime.now().millisecondsSinceEpoch,
-          'weight_kg': _draftWeight,
-          'reps': _draftReps,
+          'weight_kg': weight,
+          'reps': reps,
           'set_index': existing.length + 1,
           'completed_at': DateTime.now().toIso8601String(),
           '_local': true,
@@ -861,7 +828,6 @@ class _LiveSessionPageState extends State<LiveSessionPage> with WidgetsBindingOb
         _offline = true;
         _pendingOps += 1;
       });
-      _startRest();
       Toast.info('Подход сохранён офлайн');
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -919,7 +885,7 @@ class _LiveSessionPageState extends State<LiveSessionPage> with WidgetsBindingOb
 
   Future<void> _complete({bool confirm = true}) async {
     if (confirm) {
-      final incomplete = _exercises.where((e) => (e['status']?.toString() ?? '') != 'done').length;
+      final incomplete = _allExercises.where((e) => (e['status']?.toString() ?? '') != 'done').length;
       final ok = await showDialog<bool>(
         context: context,
         builder: (context) => AlertDialog(
@@ -1045,6 +1011,7 @@ class _LiveSessionPageState extends State<LiveSessionPage> with WidgetsBindingOb
                   return _ClientAvatar(
                     name: c['first_name']?.toString() ?? '',
                     surname: c['last_name']?.toString() ?? '',
+                    label: _clientLabel(c),
                     avatarUrl: FitMedia.url(c['avatar_url']?.toString()),
                     selected: id == _selectedClientId,
                     onTap: () => _selectClient(id),
@@ -1162,13 +1129,17 @@ class _LiveSessionPageState extends State<LiveSessionPage> with WidgetsBindingOb
   }
 
   Widget _buildEmptyExercise() {
+    final clients = _clients;
+    final selected = clients.where((c) => int.tryParse('${c['id']}') == _selectedClientId).firstOrNull;
+    final name = selected == null ? '' : _clientLabel(selected);
+    final forWhom = clients.length > 1 && name.isNotEmpty ? ' для $name' : '';
     return Container(
       padding: const EdgeInsets.all(24),
       decoration: BoxDecoration(color: _innerBg, borderRadius: BorderRadius.circular(24)),
-      child: const Text(
-        'Добавьте первое упражнение, чтобы начать записывать подходы',
+      child: Text(
+        'Добавьте первое упражнение$forWhom, чтобы начать записывать подходы',
         textAlign: TextAlign.center,
-        style: TextStyle(color: AppColors.fitGrey, fontSize: 15),
+        style: const TextStyle(color: AppColors.fitGrey, fontSize: 15),
       ),
     );
   }
@@ -1215,6 +1186,8 @@ class _LiveSessionPageState extends State<LiveSessionPage> with WidgetsBindingOb
           const SizedBox(height: 8),
           const Text('Подходы:', style: TextStyle(color: AppColors.fitGrey, fontSize: 16)),
           if (sets.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            const _SetHeader(),
             const SizedBox(height: 8),
             for (var i = 0; i < sets.length; i++)
               Padding(
@@ -1231,32 +1204,7 @@ class _LiveSessionPageState extends State<LiveSessionPage> with WidgetsBindingOb
               ),
           ],
           const SizedBox(height: 8),
-          const Divider(height: 1, thickness: 1, color: _chipBg),
-          const SizedBox(height: 16),
-          Row(
-            children: [
-              Expanded(
-                child: _LabeledStepper(
-                  label: 'Вес',
-                  value: '${_fmtKg(_draftWeight)} кг',
-                  onMinus: () => setState(() => _draftWeight = (_draftWeight - 2.5).clamp(0, 500)),
-                  onPlus: () => setState(() => _draftWeight = (_draftWeight + 2.5).clamp(0, 500)),
-                ),
-              ),
-              const SizedBox(width: 16),
-              Expanded(
-                child: _LabeledStepper(
-                  label: 'Повторы',
-                  value: '$_draftReps',
-                  onMinus: () => setState(() => _draftReps = (_draftReps - 1).clamp(1, 100)),
-                  onPlus: () => setState(() => _draftReps = (_draftReps + 1).clamp(1, 100)),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 16),
-          _LiveButton.filled(title: '+ Добавить подход', loading: _busy, onPressed: _busy ? null : _completeSet),
-          if (_restRunning || _restDoneFlash) ...[const SizedBox(height: 12), _buildRestStrip()],
+          _LiveButton.filled(title: '+ Добавить подход', loading: _busy, onPressed: _busy ? null : _addSet),
           const SizedBox(height: 16),
           const Divider(height: 1, thickness: 1, color: _chipBg),
           const SizedBox(height: 16),
@@ -1303,68 +1251,6 @@ class _LiveSessionPageState extends State<LiveSessionPage> with WidgetsBindingOb
             color: done ? const Color(0xFF1F3A24) : _danger,
             foreground: done ? AppColors.accent : Colors.white,
             onPressed: _busy || done ? null : _completeExercise,
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildRestStrip() {
-    if (!_restRunning) {
-      return Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-        decoration: BoxDecoration(
-          color: const Color(0xFF1F3A24),
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: AppColors.accent),
-        ),
-        child: const Row(
-          children: [
-            Icon(Icons.notifications_active, color: AppColors.accent, size: 18),
-            SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                'Отдых завершён — можно начинать подход',
-                style: TextStyle(color: Colors.white, fontSize: 13),
-              ),
-            ),
-          ],
-        ),
-      );
-    }
-    final color = _restPaused ? const Color(0xFFFFB84D) : AppColors.accent;
-    return Container(
-      padding: const EdgeInsets.fromLTRB(12, 6, 4, 6),
-      decoration: BoxDecoration(color: _chipBg, borderRadius: BorderRadius.circular(12)),
-      child: Row(
-        children: [
-          Text(
-            '${_restPaused ? 'Пауза' : 'Отдых'} ${_fmtRest(_restLeft)}',
-            style: TextStyle(
-              color: color,
-              fontWeight: FontWeight.w700,
-              fontFeatures: const [FontFeature.tabularFigures()],
-            ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: LinearProgressIndicator(
-              value: _restTotal == 0 ? 0 : (_restTotal - _restLeft) / _restTotal,
-              color: color,
-              backgroundColor: const Color(0xFF444444),
-              borderRadius: BorderRadius.circular(4),
-            ),
-          ),
-          IconButton(
-            visualDensity: VisualDensity.compact,
-            onPressed: _restPaused ? _resumeRest : _pauseRest,
-            icon: Icon(_restPaused ? Icons.play_arrow : Icons.pause, color: color, size: 20),
-          ),
-          IconButton(
-            visualDensity: VisualDensity.compact,
-            tooltip: 'Пропустить отдых',
-            onPressed: _skipRest,
-            icon: const Icon(Icons.skip_next, color: Colors.white70, size: 20),
           ),
         ],
       ),
@@ -1425,18 +1311,13 @@ class _LiveSessionPageState extends State<LiveSessionPage> with WidgetsBindingOb
       const SizedBox(height: 8),
     ];
   }
-
-  String _fmtRest(int sec) {
-    final m = sec ~/ 60;
-    final s = sec % 60;
-    return '$m:${s.toString().padLeft(2, '0')}';
-  }
 }
 
 class _ClientAvatar extends StatelessWidget {
   const _ClientAvatar({
     required this.name,
     required this.surname,
+    required this.label,
     required this.avatarUrl,
     required this.selected,
     required this.onTap,
@@ -1444,6 +1325,7 @@ class _ClientAvatar extends StatelessWidget {
 
   final String name;
   final String surname;
+  final String label;
   final String? avatarUrl;
   final bool selected;
   final VoidCallback onTap;
@@ -1453,8 +1335,8 @@ class _ClientAvatar extends StatelessWidget {
     final initials = '${name.isNotEmpty ? name[0] : ''}${surname.isNotEmpty ? surname[0] : ''}'.toUpperCase();
     return GestureDetector(
       onTap: onTap,
-      child: SizedBox(
-        width: 48,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(minWidth: 48, maxWidth: 72),
         child: Column(
           children: [
             Container(
@@ -1490,7 +1372,7 @@ class _ClientAvatar extends StatelessWidget {
             ),
             const SizedBox(height: 4),
             Text(
-              name,
+              label,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: TextStyle(color: selected ? Colors.white : AppColors.fitGrey, fontSize: 12),
@@ -1498,27 +1380,6 @@ class _ClientAvatar extends StatelessWidget {
           ],
         ),
       ),
-    );
-  }
-}
-
-class _LabeledStepper extends StatelessWidget {
-  const _LabeledStepper({required this.label, required this.value, required this.onMinus, required this.onPlus});
-
-  final String label;
-  final String value;
-  final VoidCallback onMinus;
-  final VoidCallback onPlus;
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(label, style: const TextStyle(color: AppColors.fitGrey, fontSize: 16)),
-        const SizedBox(height: 8),
-        _Stepper(value: value, onMinus: onMinus, onPlus: onPlus),
-      ],
     );
   }
 }
@@ -1572,6 +1433,25 @@ class _StepIcon extends StatelessWidget {
         height: size,
         child: Icon(icon, color: Colors.white, size: 18),
       ),
+    );
+  }
+}
+
+/// Column titles aligned with [_SetRow].
+class _SetHeader extends StatelessWidget {
+  const _SetHeader();
+
+  @override
+  Widget build(BuildContext context) {
+    const style = TextStyle(color: AppColors.fitGrey, fontSize: 14);
+    return const Row(
+      children: [
+        SizedBox(width: 28),
+        Expanded(flex: 6, child: Text('Вес', style: style)),
+        SizedBox(width: 8),
+        Expanded(flex: 5, child: Text('Повторы', style: style)),
+        SizedBox(width: 32),
+      ],
     );
   }
 }
@@ -1659,13 +1539,23 @@ class _PreviousChip extends StatelessWidget {
       child: Row(
         children: [
           Text('Подход $index:', style: const TextStyle(color: AppColors.fitGrey, fontSize: 14)),
-          const Spacer(),
-          Text('$weight кг', style: const TextStyle(color: Colors.white, fontSize: 16)),
-          const Padding(
-            padding: EdgeInsets.symmetric(horizontal: 2),
-            child: Icon(Icons.close, color: AppColors.fitGrey, size: 16),
+          const SizedBox(width: 4),
+          Expanded(
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              alignment: Alignment.centerRight,
+              child: Row(
+                children: [
+                  Text('$weight кг', style: const TextStyle(color: Colors.white, fontSize: 16)),
+                  const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 2),
+                    child: Icon(Icons.close, color: AppColors.fitGrey, size: 16),
+                  ),
+                  Text(reps, style: const TextStyle(color: Colors.white, fontSize: 16)),
+                ],
+              ),
+            ),
           ),
-          Text(reps, style: const TextStyle(color: Colors.white, fontSize: 16)),
         ],
       ),
     );

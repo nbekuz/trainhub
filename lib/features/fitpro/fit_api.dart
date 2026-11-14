@@ -837,6 +837,11 @@ class FitApi {
     return _list(_unwrap(response.data));
   }
 
+  static Future<Map<String, dynamic>> linkStats(int linkId) async {
+    final response = await _api.get<Map<String, dynamic>>('/trainer/clients/$linkId/stats');
+    return _asMap(_unwrap(response.data));
+  }
+
   static Future<List<Map<String, dynamic>>> linkSessions(int linkId) async {
     final response = await _api.get<Map<String, dynamic>>('/trainer/clients/$linkId/sessions');
     final data = _unwrap(response.data);
@@ -861,6 +866,7 @@ class FitApi {
   static Future<Map<String, dynamic>> startSession({
     List<int> clientIds = const [],
     int? programDayId,
+    int? calendarEventId,
     String source = 'new',
     List<String> kinds = const ['strength'],
   }) async {
@@ -874,6 +880,7 @@ class FitApi {
         'kinds': kinds,
         if (clientIds.isNotEmpty) 'client_ids': clientIds,
         if (programDayId != null) 'program_day_id': programDayId,
+        if (calendarEventId != null) 'calendar_event_id': calendarEventId,
       });
       return _asMap(_unwrap(response.data));
     } on ApiException catch (e) {
@@ -1046,8 +1053,12 @@ class FitApi {
 
   // ── Live session ──────────────────────────────────────────────────────────
 
-  static Future<Map<String, dynamic>> session(int id) async {
-    final response = await _api.get<Map<String, dynamic>>('/sessions/$id');
+  /// [clientId] keeps only that participant's exercises of a group workout.
+  static Future<Map<String, dynamic>> session(int id, {int? clientId}) async {
+    final response = await _api.get<Map<String, dynamic>>(
+      '/sessions/$id',
+      queryParameters: clientId == null ? null : {'client_id': clientId},
+    );
     return _asMap(_unwrap(response.data));
   }
 
@@ -1082,12 +1093,14 @@ class FitApi {
     int? restSec,
     int? sets,
     int? reps,
+    int? clientId,
   }) async {
     final response = await _api.post<Map<String, dynamic>>('/sessions/$sessionId/exercises', data: {
       'exercise_id': exerciseId,
       if (restSec != null) 'rest_sec': restSec,
       if (sets != null) 'sets': sets,
       if (reps != null) 'reps': reps,
+      if (clientId != null) 'client_id': clientId,
     });
     return _asMap(_unwrap(response.data));
   }
@@ -1861,15 +1874,7 @@ String _formatLabel(String format) {
   };
 }
 
-String _statusLabel(String status) {
-  return switch (status) {
-    'completed' => 'Завершено',
-    'in_progress' => 'В процессе',
-    'cancelled' => 'Отменено',
-    'no_show' => 'Неявка',
-    _ => 'Ожидает',
-  };
-}
+String _statusLabel(String status) => FitLabels.sessionStatus(status);
 
 String _kindLabel(String code) => FitLabels.kind(code);
 

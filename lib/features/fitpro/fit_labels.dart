@@ -57,6 +57,16 @@ class FitLabels {
     return rawTitle;
   }
 
+  static String sessionStatus(String? status) {
+    return switch (status) {
+      'completed' => 'Завершено',
+      'in_progress' => 'В процессе',
+      'cancelled' => 'Отменено',
+      'no_show' => 'Неявка',
+      _ => 'Ожидает',
+    };
+  }
+
   static String muscle(String? code) {
     final raw = (code ?? '').trim();
     if (raw.isEmpty) return '';

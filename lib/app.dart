@@ -76,9 +76,29 @@ class _AppState extends ConsumerState<App> with WidgetsBindingObserver {
         GlobalCupertinoLocalizations.delegate,
       ],
       routerConfig: router,
-      builder: (context, child) => ActiveWorkoutOverlay(
-        child: child ?? const SizedBox.shrink(),
+      builder: (context, child) => UnfocusOnTapOutside(
+        child: ActiveWorkoutOverlay(
+          child: child ?? const SizedBox.shrink(),
+        ),
       ),
+    );
+  }
+}
+
+/// Closes the keyboard when the user taps outside any text field.
+class UnfocusOnTapOutside extends StatelessWidget {
+  /// Creates an [UnfocusOnTapOutside] around [child].
+  const UnfocusOnTapOutside({super.key, required this.child});
+
+  /// The app content.
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      behavior: HitTestBehavior.translucent,
+      onTap: () => FocusManager.instance.primaryFocus?.unfocus(),
+      child: child,
     );
   }
 }

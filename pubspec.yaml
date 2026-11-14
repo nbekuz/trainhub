@@ -1,7 +1,7 @@
 name: trainhub
 description: TrainHub Flutter app — Clean Architecture with Dio, Riverpod, GetIt and GoRouter.
 publish_to: "none"
-version: 1.0.17+17
+version: 1.0.18+18
 
 environment:
   sdk: ">=3.8.0 <4.0.0"
